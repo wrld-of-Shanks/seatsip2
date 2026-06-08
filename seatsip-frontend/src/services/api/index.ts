@@ -269,4 +269,9 @@ export const rewardsApi = {
   earn: (action: 'VISIT' | 'REVIEW' | 'REFERRAL' | 'CHECKIN') => api.post('/rewards/earn', { action }),
 };
 
+// ===== Banners =====
+export const bannersApi = {
+  list: (params?: { slider_type?: string }) => api.get('/banners', { params }),
+};
+
 export default api;

@@ -123,8 +123,8 @@ const QUICK_FILTERS = [
 
 // Fallback static data (used when backend is unavailable)
 const FALLBACK_CAFES = [
-  { id: '1', name: 'Dyu Art Café', tag: 'Art', rating: 4.8, reviews: 521, distance: '2.4 km', eta: '15 min', image: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=400' },
-  { id: '2', name: 'Kapi Kafe', tag: 'South-Indian', rating: 4.7, reviews: 631, distance: '2.8 km', eta: '20 min', image: 'https://images.unsplash.com/photo-1445116572660-236099ec97a0?w=400' },
+  { id: '1', name: 'Dyu Art Café', tag: 'Art', tags: ['Art'], moods: [] as string[], rating: 4.8, reviews: 521, distance: '2.4 km', eta: '15 min', image: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=400', discount: null as string | null, priceLevel: 2 },
+  { id: '2', name: 'Kapi Kafe', tag: 'South-Indian', tags: ['South-Indian'], moods: [] as string[], rating: 4.7, reviews: 631, distance: '2.8 km', eta: '20 min', image: 'https://images.unsplash.com/photo-1445116572660-236099ec97a0?w=400', discount: null as string | null, priceLevel: 1 },
 ];
 
 const CAFE_IMAGES = [
@@ -204,19 +204,48 @@ const formatFullAddress = (address: SavedAddress) => {
   ]).join(' • ');
 };
 
+const categoryMatches = (categoryLabel: string, tags: string[], moods: string[]) => {
+  const label = categoryLabel.toLowerCase().trim();
+  if (label === 'all') return true;
+
+  const allWords = [...tags, ...moods].map(x => x.toLowerCase().trim());
+
+  if (label === 'beverages') {
+    const drinkKeywords = ['beverage', 'beverages', 'drinks', 'coffee', 'tea', 'café', 'cafe', 'brew', 'espresso'];
+    return allWords.some(w => drinkKeywords.some(kw => w.includes(kw)));
+  }
+
+  if (label === 'food') {
+    const foodKeywords = ['food', 'eat', 'eats', 'bakery', 'croissant', 'sandwich', 'meals', 'pizza', 'burger', 'pasta', 'toast', 'waffle', 'dessert', 'desserts', 'cake'];
+    return allWords.some(w => foodKeywords.some(kw => w.includes(kw)));
+  }
+
+  if (label === 'dietary') {
+    const dietaryKeywords = ['dietary', 'vegan', 'vegetarian', 'veg', 'gluten', 'healthy', 'keto', 'organic'];
+    return allWords.some(w => dietaryKeywords.some(kw => w.includes(kw)));
+  }
+
+  return allWords.some(w => w.includes(label) || label.includes(w));
+};
+
 // Helper to map API cafe to card-friendly shape
 function mapCafeToCard(cafe: any, index: number) {
   const tags = Array.isArray(cafe.tags) ? cafe.tags : (typeof cafe.tags === 'string' ? JSON.parse(cafe.tags || '[]') : []);
+  const moods = Array.isArray(cafe.moods) ? cafe.moods : (typeof cafe.moods === 'string' ? JSON.parse(cafe.moods || '[]') : []);
   const images = Array.isArray(cafe.images) ? cafe.images : (typeof cafe.images === 'string' ? JSON.parse(cafe.images || '[]') : []);
   return {
     id: cafe.id,
     name: cafe.name,
     tag: tags[0] || 'Café',
+    tags,
+    moods,
     rating: cafe.rating || 4.5,
     reviews: cafe.review_count || 0,
     distance: cafe.distance || `${(1.5 + index * 0.5).toFixed(1)} km`,
     eta: cafe.prep_time_minutes ? `${cafe.prep_time_minutes} min` : `${15 + index * 5} min`,
     image: images[0] || cafe.image_url || CAFE_IMAGES[index % CAFE_IMAGES.length],
+    discount: cafe.discount || null,
+    priceLevel: cafe.price_level ?? 2,
   };
 }
 
@@ -241,7 +270,7 @@ const CafeCard = ({ cafe, onPress }: { cafe: CafeCardData; onPress: () => void }
   );
 };
 
-const PopularItem = ({ item, onPress }: { item: typeof POPULAR_ITEMS[0]; onPress: (item: any) => void }) => {
+const PopularItem = ({ item, onPress }: { item: any; onPress: (item: any) => void }) => {
   const [liked, setLiked] = useState(false);
   return (
     <View style={styles.popItem}>
@@ -317,6 +346,19 @@ export default function CafeSpotHome() {
   const sheetScrollRef = React.useRef<ScrollView>(null);
   const [cafes, setCafes] = useState<CafeCardData[]>(FALLBACK_CAFES);
   const [trending, setTrending] = useState<CafeCardData[]>(FALLBACK_CAFES);
+  const [popularItems, setPopularItems] = useState<any[]>(() =>
+    POPULAR_ITEMS.map(item => ({
+      ...item,
+      rawItem: {
+        id: item.id,
+        name: item.name,
+        description: item.desc,
+        price: parseInt(item.price.replace('₹', ''), 10),
+        image_url: item.image,
+        cafe_id: '1',
+      }
+    }))
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [addressSheetVisible, setAddressSheetVisible] = useState(false);
   const [addresses, setAddresses] = useState<SavedAddress[]>([DEFAULT_ADDRESS]);
@@ -343,14 +385,30 @@ export default function CafeSpotHome() {
   const loadCafes = useCallback(async (isRefresh = false) => {
     try {
       if (!isRefresh) setLoading(true);
-      const [nearRes, trendRes] = await Promise.all([
+      const [nearRes, trendRes, popRes] = await Promise.all([
         cafesApi.list({ limit: 6 }),
         cafesApi.list({ sort: 'trending', limit: 6 }),
+        cafesApi.getPopularItems(5).catch(() => ({ data: { success: false, data: [] } })),
       ]);
       const nearCafes = (nearRes.data.data || []).map(mapCafeToCard);
       const trendCafes = (trendRes.data.data || []).map(mapCafeToCard);
       if (nearCafes.length > 0) setCafes(nearCafes);
       if (trendCafes.length > 0) setTrending(trendCafes);
+
+      if (popRes.data.success && Array.isArray(popRes.data.data) && popRes.data.data.length > 0) {
+        const mapped = popRes.data.data.map((item: any) => ({
+          id: item.id,
+          cafe_id: item.cafe_id,
+          name: item.name,
+          desc: item.description || '',
+          image: item.image_url || 'https://images.unsplash.com/photo-1572442388796-11668a67e53d?w=300',
+          tags: item.is_veg ? ['Veg'] : ['Non-Veg'],
+          cal: item.calories ? `${item.calories} cal` : '120 cal',
+          price: `₹${item.price}`,
+          rawItem: item,
+        }));
+        setPopularItems(mapped);
+      }
     } catch (err) {
       console.log('Error loading cafes', err);
     } finally {
@@ -415,18 +473,36 @@ export default function CafeSpotHome() {
 
     return list
       .filter(cafe => {
-        const haystack = `${cafe.name} ${cafe.tag}`.toLowerCase();
-        const matchesSearch = !query || haystack.includes(query);
-        const matchesCategory = category === 'All' || haystack.includes(category.toLowerCase().replace(' & ', ' '));
+        // Search filter matching name, tags, or moods
+        const nameMatch = cafe.name.toLowerCase();
+        const matchesSearch = !query || nameMatch.includes(query) || 
+                              cafe.tags.some(t => t.toLowerCase().includes(query)) ||
+                              cafe.moods.some(m => m.toLowerCase().includes(query));
+
+        // Category filter matching tags or moods via semantic helper
+        const matchesCategory = categoryMatches(category, cafe.tags, cafe.moods);
 
         if (!matchesSearch || !matchesCategory) return false;
-        if (activeFilter === 'topRated') return cafe.rating >= 4.7;
-        if (activeFilter === 'budget') return Number.parseInt(cafe.eta, 10) <= 20;
+
+        // Quick Filters:
+        // 'budget' = Under ₹150 (price level <= 1)
+        if (activeFilter === 'budget') return cafe.priceLevel <= 1;
+        // 'topRated' = Top rated (rating >= 4.5)
+        if (activeFilter === 'topRated') return cafe.rating >= 4.5;
+        // 'offers' = Great offers (has discount)
+        if (activeFilter === 'offers') return !!cafe.discount && cafe.discount.trim() !== '';
+
         return true;
       })
       .sort((a, b) => {
         if (activeFilter === 'topRated') return b.rating - a.rating;
-        if (activeFilter === 'offers') return b.reviews - a.reviews;
+        if (activeFilter === 'offers') {
+          const aHas = !!a.discount && a.discount.trim() !== '';
+          const bHas = !!b.discount && b.discount.trim() !== '';
+          if (aHas && !bHas) return -1;
+          if (!aHas && bHas) return 1;
+          return b.reviews - a.reviews;
+        }
         return 0;
       });
   }, [activeCategory, activeFilter, searchQuery]);
@@ -718,16 +794,16 @@ export default function CafeSpotHome() {
             <AppIcon name="→" size={12} color={BROWN} />
           </TouchableOpacity>
         </View>
-        {POPULAR_ITEMS.map(item => (
+        {popularItems.map(item => (
           <PopularItem
             key={item.id}
             item={item}
             onPress={(selectedItem) => {
               setSelectedProduct({
-                ...selectedItem,
+                ...selectedItem.rawItem,
                 description: selectedItem.desc,
                 image_url: selectedItem.image,
-                price: parseInt(selectedItem.price.replace('₹', ''), 10),
+                price: selectedItem.rawItem.price,
                 is_popular: true,
               });
             }}
@@ -903,7 +979,7 @@ export default function CafeSpotHome() {
       <ProductDetailSheet
         visible={!!selectedProduct}
         item={selectedProduct}
-        cafeId={cafes[0]?.id || 'dyu-art-cafe'}
+        cafeId={selectedProduct?.cafe_id || cafes[0]?.id || 'dyu-art-cafe'}
         onClose={() => setSelectedProduct(null)}
       />
       {cartCount > 0 && (

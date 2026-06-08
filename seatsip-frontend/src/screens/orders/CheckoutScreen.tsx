@@ -269,6 +269,7 @@ export default function CheckoutScreen() {
     }
   };
 
+
   if (!hasCart) {
     return null;
   }

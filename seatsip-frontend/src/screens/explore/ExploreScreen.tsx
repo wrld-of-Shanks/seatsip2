@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { bannersApi } from '../../services/api';
 import {
   View,
   Text,
@@ -88,12 +89,45 @@ const MenuCard = ({ item, onPress }: { item: any, onPress: () => void }) => (
 export default function ExploreScreen() {
   const navigation = useNavigation<Nav>();
   const [searchText, setSearchText] = useState('');
+  const [cards, setCards] = useState<any[]>(MENU_CARDS);
 
-  const handleCardPress = (title: string) => {
-    navigation.navigate('CafeList', { 
-      title: title,
-      filter: title.toLowerCase().replace(' ', '_')
-    });
+  useEffect(() => {
+    let active = true;
+    async function loadCards() {
+      try {
+        const { data } = await bannersApi.list({ slider_type: 'EXPLORE' });
+        if (active && data?.success && Array.isArray(data.data) && data.data.length > 0) {
+          const mapped = data.data.map((b: any) => ({
+            id: b.id,
+            title: b.title,
+            description: b.subtitle,
+            time: b.tag,
+            timeColor: b.tagColor || '#2D6A4F',
+            timeBg: b.tagBg || '#D8F3DC',
+            image: b.bgImage ? { uri: b.bgImage } : require('../../assets/images/explore/matcha_1.png'),
+            cafeId: b.cafeId,
+          }));
+          setCards(mapped);
+        }
+      } catch (error) {
+        console.log('Failed to fetch explore cards:', error);
+      }
+    }
+    loadCards();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleCardPress = (item: any) => {
+    if (item.cafeId) {
+      navigation.navigate('CafeDetail', { cafeId: item.cafeId });
+    } else {
+      navigation.navigate('CafeList', { 
+        title: item.title,
+        filter: item.title.toLowerCase().replace(' ', '_')
+      });
+    }
   };
 
   return (
@@ -127,11 +161,11 @@ export default function ExploreScreen() {
 
           {/* ── Menu Cards ── */}
           <View style={styles.cardList}>
-            {MENU_CARDS.map((item) => (
+            {cards.map((item) => (
               <MenuCard 
                 key={item.id} 
                 item={item} 
-                onPress={() => handleCardPress(item.title)}
+                onPress={() => handleCardPress(item)}
               />
             ))}
           </View>

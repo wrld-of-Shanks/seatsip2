@@ -13,7 +13,7 @@ Notifications.setNotificationHandler({
 });
 
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
-  if (!Device.isDevice) {
+  if (Platform.OS === 'web' || !Device.isDevice) {
     return null;
   }
   const { status: existing } = await Notifications.getPermissionsAsync();

@@ -15,7 +15,7 @@ export type RootStackParamList = {
 
   // Reservation flow
   TableSelect: { cafeId: string; cafeName: string };
-  ReservationDetails: { cafeId: string; cafeName: string; tableId?: string; cafeAddress?: string };
+  ReservationDetails: { cafeId: string; cafeName: string; tableId?: string; cafeAddress?: string; partySize?: number; time?: string; date?: string };
   PreOrderMenu: { cafeId: string; cafeName: string; reservationData: any; reservationId?: string };
   BookingConfirmed: { reservation: any };
 

@@ -32,16 +32,16 @@ const ReservationDetailsScreen = () => {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const route = useRoute<Route>();
-  const { cafeId, cafeName, tableId, cafeAddress: paramAddress } = route.params;
+  const { cafeId, cafeName, tableId, cafeAddress: paramAddress, partySize: paramPartySize, time: paramTime, date: paramDate } = route.params;
 
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [addressLine, setAddressLine] = useState(paramAddress || '');
 
   // Main state
-  const [date, setDate] = useState(getTomorrow());
-  const [time, setTime] = useState("19:00");
-  const [partySize, setPartySize] = useState(2);
+  const [date, setDate] = useState(paramDate || getTomorrow());
+  const [time, setTime] = useState(paramTime || "19:00");
+  const [partySize, setPartySize] = useState(paramPartySize || 2);
   const [notes, setNotes] = useState("");
 
   function getTomorrow() {
@@ -77,7 +77,7 @@ const ReservationDetailsScreen = () => {
   }
 
   // Backup (for cancel)
-  const [backup, setBackup] = useState({ time: "19:00", partySize: 2, notes: "" });
+  const [backup, setBackup] = useState({ time: paramTime || "19:00", partySize: paramPartySize || 2, notes: "" });
 
   const handleEdit = () => {
     setBackup({ time, partySize, notes });

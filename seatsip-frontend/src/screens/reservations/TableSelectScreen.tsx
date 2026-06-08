@@ -21,7 +21,6 @@ const { width: SCREEN_W } = Dimensions.get('window');
 type Route = RouteProp<RootStackParamList, 'TableSelect'>;
 
 const PARTY_SIZES = [1, 2, 3, 4, 5, 6, 8, 10];
-const TIMES = ["09:00", "11:00", "13:00", "15:00", "17:00", "19:00"];
 
 function getTomorrow(): string {
   const d = new Date();
@@ -41,6 +40,7 @@ const SelectTableScreen = () => {
   const cafeName = route.params?.cafeName || "Café";
 
   const [partySize, setPartySize] = useState(2);
+  const [times, setTimes] = useState<string[]>(["09:00", "11:00", "13:00", "15:00", "17:00", "19:00"]);
   const [time, setTime] = useState("19:00");
   const [reservationDate] = useState(() => getTomorrow());
   const [floor, setFloor] = useState("Ground");
@@ -56,8 +56,18 @@ const SelectTableScreen = () => {
       if (data.success && data.data) {
         const line = formatLocationLine(data.data.address, data.data.city);
         setLocationLine(line);
+
+        const slotsRaw = data.data.reservation_slots;
+        if (slotsRaw) {
+          const parsed = typeof slotsRaw === 'string' ? JSON.parse(slotsRaw) : slotsRaw;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setTimes(parsed);
+            setTime(parsed[0]);
+          }
+        }
       }
-    } catch {
+    } catch (err) {
+      console.error("Failed to fetch cafe meta:", err);
       setLocationLine("");
     }
   }, [cafeId]);
@@ -104,6 +114,9 @@ const SelectTableScreen = () => {
       cafeName,
       tableId: selectedTable,
       cafeAddress: locationLine || undefined,
+      partySize,
+      time,
+      date: reservationDate,
     });
   };
 
@@ -177,7 +190,7 @@ const SelectTableScreen = () => {
             <Text style={styles.sectionSub}>Reservations open for {reservationDate} — choose a time</Text>
 
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-              {TIMES.map((t) => (
+              {times.map((t) => (
                 <TouchableOpacity
                   key={t}
                   style={[

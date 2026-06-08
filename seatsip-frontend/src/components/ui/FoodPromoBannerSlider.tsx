@@ -9,6 +9,7 @@ import {
   Image,
   ViewToken,
 } from 'react-native';
+import { bannersApi } from '../../services/api';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const SLIDE_WIDTH = SCREEN_WIDTH - 32;
@@ -167,12 +168,14 @@ const SlideItem = ({ item }: { item: Slide }) => (
 export default function FoodPromoBannerSlider() {
   const listRef = useRef<FlatList>(null);
   const [active, setActive] = useState(0);
+  const [slides, setSlides] = useState<Slide[]>(SLIDES);
   const autoRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const startAuto = () => {
+    if (slides.length <= 1) return;
     autoRef.current = setInterval(() => {
       setActive(prev => {
-        const next = (prev + 1) % SLIDES.length;
+        const next = (prev + 1) % slides.length;
         listRef.current?.scrollToIndex({ index: next, animated: true });
         return next;
       });
@@ -184,9 +187,27 @@ export default function FoodPromoBannerSlider() {
   };
 
   useEffect(() => {
+    let activeFlag = true;
+    async function fetchBanners() {
+      try {
+        const { data } = await bannersApi.list({ slider_type: 'FOOD_PROMO' });
+        if (activeFlag && data?.success && Array.isArray(data.data) && data.data.length > 0) {
+          setSlides(data.data);
+        }
+      } catch (error) {
+        console.log('Failed to fetch dynamic food banners:', error);
+      }
+    }
+    fetchBanners();
+    return () => {
+      activeFlag = false;
+    };
+  }, []);
+
+  useEffect(() => {
     startAuto();
     return stopAuto;
-  }, []);
+  }, [slides]);
 
   const onViewableItemsChanged = useRef(
     ({ viewableItems }: { viewableItems: ViewToken[] }) => {
@@ -209,7 +230,7 @@ export default function FoodPromoBannerSlider() {
     <View style={styles.container}>
       <FlatList
         ref={listRef}
-        data={SLIDES}
+        data={slides}
         keyExtractor={item => item.id}
         horizontal
         pagingEnabled
@@ -229,7 +250,6 @@ export default function FoodPromoBannerSlider() {
           index,
         })}
       />
-
     </View>
   );
 }

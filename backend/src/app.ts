@@ -12,6 +12,8 @@ import { cartRouter, usersRouter, notificationsRouter } from './api/misc';
 import paymentsRouter from './api/payments';
 import adminRouter from './api/admin';
 import rewardsRouter from './api/rewards';
+import menuRouter from './api/menu';
+import bannersRouter from './api/banners';
 import { corsMiddleware, helmetMiddleware, requestId, safeMorgan, sanitizeInput } from './security/http';
 import { secureLogger } from './security/logger';
 import { redactObjectForLog } from './security/redaction';
@@ -38,12 +40,14 @@ export function createApp(): express.Application {
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/admin', adminRouter);
   app.use('/api/v1/cafes', cafesRouter);
+  app.use('/api/v1/menu', menuRouter);
   app.use('/api/v1/orders', ordersRouter);
   app.use('/api/v1/reservations', reservationsRouter);
   app.use('/api/v1/cart', cartRouter);
   app.use('/api/v1/users', usersRouter);
   app.use('/api/v1/notifications', notificationsRouter);
   app.use('/api/v1/rewards', rewardsRouter);
+  app.use('/api/v1/banners', bannersRouter);
 
   app.use('*', (_, res) => res.status(404).json({ success: false, message: 'Endpoint not found' }));
 

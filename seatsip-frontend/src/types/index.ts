@@ -78,6 +78,9 @@ export interface MenuItem {
   is_popular: number;
   prep_time_minutes: number;
   calories?: number;
+  tags?: string[];
+  caffeine?: number;
+  prep_time?: string;
 }
 
 export interface OrderItem extends MenuItem {

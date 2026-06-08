@@ -48,6 +48,33 @@ function galleryFromCafe(cafe: any): string[] {
 
 type CafeDetailRouteProp = RouteProp<RootStackParamList, 'CafeDetail'>;
 
+const MOOD_STYLES: Record<string, { icon: string; bgColor: string; textColor: string }> = {
+  work: { icon: 'work', bgColor: '#FFCCAA', textColor: '#C87941' },
+  laptop: { icon: 'work', bgColor: '#FFCCAA', textColor: '#C87941' },
+  study: { icon: 'work', bgColor: '#FFCCAA', textColor: '#C87941' },
+  date: { icon: 'date', bgColor: '#D0C5FF', textColor: '#7B5FD4' },
+  romance: { icon: 'date', bgColor: '#D0C5FF', textColor: '#7B5FD4' },
+  romantic: { icon: 'date', bgColor: '#D0C5FF', textColor: '#7B5FD4' },
+  chill: { icon: 'vegan', bgColor: '#BAEBC3', textColor: '#2E7D45' },
+  relax: { icon: 'vegan', bgColor: '#BAEBC3', textColor: '#2E7D45' },
+  relaxed: { icon: 'vegan', bgColor: '#BAEBC3', textColor: '#2E7D45' },
+  social: { icon: 'users', bgColor: '#FFF2C5', textColor: '#E5A900' },
+  group: { icon: 'users', bgColor: '#FFF2C5', textColor: '#E5A900' },
+  groups: { icon: 'users', bgColor: '#FFF2C5', textColor: '#E5A900' },
+  friends: { icon: 'users', bgColor: '#FFF2C5', textColor: '#E5A900' },
+  meeting: { icon: 'users', bgColor: '#FFF2C5', textColor: '#E5A900' },
+  coffee: { icon: 'coffee', bgColor: '#F0E6DF', textColor: '#8B5E3C' },
+  brew: { icon: 'coffee', bgColor: '#F0E6DF', textColor: '#8B5E3C' },
+};
+
+function getMoodStyle(mood: string) {
+  const normalized = mood.toLowerCase().trim();
+  if (MOOD_STYLES[normalized]) {
+    return MOOD_STYLES[normalized];
+  }
+  return { icon: 'popular', bgColor: '#EAD7C3', textColor: '#8B5E3C' };
+}
+
 const DyuArtCafeScreen = () => {
   const navigation = useNavigation<any>();
   const route = useRoute<CafeDetailRouteProp>();
@@ -66,7 +93,10 @@ const DyuArtCafeScreen = () => {
   const cafeId = route.params?.cafeId || '';
   const gallery = galleryFromCafe(cafe);
   const cafeName = cafe?.name || 'Café';
-  const moods = parseJsonArray(cafe?.moods);
+  const rawMoods = parseJsonArray(cafe?.moods);
+  const moods = rawMoods.length > 0 ? rawMoods : ['Work', 'Date', 'Chill'];
+  const rawTags = parseJsonArray(cafe?.tags);
+  const tags = rawTags.length > 0 ? rawTags : ['Art space', 'Board games', 'Vegan options', 'Instagrammable'];
 
   const loadData = useCallback(async () => {
     try {
@@ -385,18 +415,15 @@ const DyuArtCafeScreen = () => {
             <Text style={styles.sectionTitleMain}>Perfect for</Text>
           </View>
           <View style={styles.perfectForRow}>
-            <View style={[styles.perfectCard, { backgroundColor: '#FFCCAA' }]}>
-              <AppIcon name="work" size={20} color="#C87941" />
-              <Text style={[styles.perfectText, { color: '#C87941' }]}>Work</Text>
-            </View>
-            <View style={[styles.perfectCard, { backgroundColor: '#D0C5FF' }]}>
-              <AppIcon name="date" size={20} color="#7B5FD4" />
-              <Text style={[styles.perfectText, { color: '#7B5FD4' }]}>Date</Text>
-            </View>
-            <View style={[styles.perfectCard, { backgroundColor: '#BAEBC3' }]}>
-              <AppIcon name="vegan" size={20} color="#2E7D45" />
-              <Text style={[styles.perfectText, { color: '#2E7D45' }]}>Chill</Text>
-            </View>
+            {moods.map((mood) => {
+              const style = getMoodStyle(mood);
+              return (
+                <View key={mood} style={[styles.perfectCard, { backgroundColor: style.bgColor }]}>
+                  <AppIcon name={style.icon} size={20} color={style.textColor} />
+                  <Text style={[styles.perfectText, { color: style.textColor }]}>{mood}</Text>
+                </View>
+              );
+            })}
           </View>
 
           {/* 7. More Reasons (Tags) */}
@@ -405,7 +432,7 @@ const DyuArtCafeScreen = () => {
             <Text style={styles.moreReasonsTitle}>More reasons to love it</Text>
           </View>
           <View style={styles.tagsContainer}>
-            {['Art space', 'Board games', 'Vegan options', 'Instagrammable'].map(tag => (
+            {tags.map(tag => (
               <View key={tag} style={styles.outlineTag}>
                 <AppIcon name="popular" size={12} color="#888" />
                 <Text style={styles.outlineTagText}>{tag}</Text>
@@ -780,8 +807,8 @@ const styles = StyleSheet.create({
   sectionHeaderCompact: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
   sectionTitleEmoji: { fontSize: 17 },
   sectionTitleMain: { fontSize: 17, fontFamily: 'Courgette_400Regular', fontWeight: '700', color: '#1A1A1A' },
-  perfectForRow: { flexDirection: 'row', gap: 10, marginBottom: 18 },
-  perfectCard: { flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: 'center' },
+  perfectForRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 18 },
+  perfectCard: { flexGrow: 1, minWidth: 80, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 8, alignItems: 'center' },
   perfectText: { fontSize: 13, fontWeight: '700', marginTop: 4 },
 
   // More Reasons

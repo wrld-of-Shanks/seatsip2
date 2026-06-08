@@ -70,6 +70,11 @@ model User {
   deletion_scheduled_at DateTime?
   deletion_reason       String?
 
+  government_id         String?
+  business_license      String?
+  experience_years      Int?
+  verification_status   String    @default("PENDING")
+
   created_at            DateTime  @default(now())
   updated_at            DateTime  @updatedAt
 
@@ -84,6 +89,7 @@ model User {
   tier_history          LoyaltyTierHistory[]
   redeemed_rewards      RedeemedReward[]
   addresses             UserAddress[]
+  owned_cafes           Cafe[]               @relation(name: "UserOwnedCafes")
 
   @@index([email])
   @@index([phone])
@@ -169,6 +175,9 @@ model Cafe {
 
   // Media
   image_url        String?
+  emoji            String?
+  cover_color      String?
+  discount         String?
   images           String   @default("[]")   // JSON string[]
 
   // Ratings (denormalised; updated via trigger or job)
@@ -204,6 +213,9 @@ model Cafe {
   // Capacity
   total_seats      Int      @default(0)      // sum of table.capacity; denormalised
 
+  owner_id         String?
+  owner            User?    @relation(name: "UserOwnedCafes", fields: [owner_id], references: [id], onDelete: SetNull)
+
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
 
@@ -217,6 +229,7 @@ model Cafe {
   cart_items       CartItem[]
   operating_hours  CafeOperatingHours[]
   promotions       Promotion[]
+  promotional_banners Banner[]
 
   @@index([city])
   @@index([slug])
@@ -307,6 +320,7 @@ model MenuItem {
   is_featured       Int             @default(0)
   spice_level       Int             @default(0)  // 0–3
   calories          Int?
+  caffeine          Int?
   allergens         String          @default("[]")  // JSON string[]
   customizations    String          @default("[]")  // JSON [{name, options[]}]
   tags              String          @default("[]")
@@ -701,4 +715,36 @@ model AuditLog {
   @@index([action])
   @@index([created_at])
   @@map("audit_logs")
+}
+
+model Banner {
+  id                String   @id
+  slider_type       String   @default("PROMO") // PROMO | FOOD_PROMO
+  tag               String
+  tag_icon          String?  // for FOOD_PROMO tag icon (e.g. ⚡)
+  tag_color         String   @default("#FFFFFF")
+  tag_bg            String?  // for FOOD_PROMO tag pill background
+  title             String
+  title_accent      String?  // for PROMO title accent
+  subtitle          String
+  subtitle_color    String?  // for FOOD_PROMO subtitle color
+  cta_text          String
+  cta_bg            String   @default("#FFFFFF")
+  cta_text_color    String   @default("#000000") // maps to ctaText2/ctaTextColor
+  bg_color          String   @default("#000000") // maps to bgColor/bg
+  overlay_color     String?  // for PROMO overlay color
+  stripe_color      String?  // for FOOD_PROMO stripe color
+  emoji             String?
+  emoji_label       String?
+  emoji_label_color String?
+  badge             String?  // for PROMO badge
+  bg_image          String
+  cafe_id           String?
+  cafe              Cafe?    @relation(fields: [cafe_id], references: [id], onDelete: SetNull)
+  is_active         Int      @default(1)
+  sort_order        Int      @default(0)
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  @@map("banners")
 }

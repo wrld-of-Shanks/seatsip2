@@ -110,11 +110,25 @@ export default function ProductDetailSheet({ visible, item, cafeId, onClose }: P
   const [selectedMilk, setSelectedMilk] = useState('whole');
   const [adding, setAdding] = useState(false);
 
+  const isBeverage = useMemo(() => {
+    if (!item?.category) return true;
+    const cat = item.category.toLowerCase();
+    return !(
+      cat.includes('food') ||
+      cat.includes('dessert') ||
+      cat.includes('snack') ||
+      cat.includes('bakery') ||
+      cat.includes('sides') ||
+      cat.includes('meal') ||
+      cat.includes('combo')
+    );
+  }, [item?.category]);
+
   const snapPoints = useMemo(() => ['85%'], []);
 
   useEffect(() => {
     if (visible && item) {
-      const defaultSize = item.sizes?.[1] || item.sizes?.[0] || null;
+      const defaultSize = isBeverage ? (item.sizes?.[1] || item.sizes?.[0] || null) : null;
       setSelectedSize(defaultSize);
       setQuantity(1);
       setSelectedMilk('whole');
@@ -123,7 +137,7 @@ export default function ProductDetailSheet({ visible, item, cafeId, onClose }: P
     } else {
       bottomSheetRef.current?.close();
     }
-  }, [visible, item]);
+  }, [visible, item, isBeverage]);
 
   const handleSheetChanges = useCallback((index: number) => {
     if (index === -1) {
@@ -192,14 +206,30 @@ export default function ProductDetailSheet({ visible, item, cafeId, onClose }: P
         ]}
       >
         <View style={styles.hero}>
-          {item.image_url && (
+          {isBeverage ? (
+            <>
+              {item.image_url && (
+                <Image 
+                  source={typeof item.image_url === 'string' ? { uri: item.image_url } : item.image_url} 
+                  style={[StyleSheet.absoluteFill, { opacity: 0.18 }]} 
+                  resizeMode="cover"
+                />
+              )}
+              <CupStack quantity={quantity} scale={selectedSize?.name === 'Large' ? 1 : selectedSize?.name === 'Small' ? 0.72 : 0.88} />
+            </>
+          ) : item.image_url ? (
             <Image 
               source={typeof item.image_url === 'string' ? { uri: item.image_url } : item.image_url} 
-              style={[StyleSheet.absoluteFill, { opacity: 0.18 }]} 
+              style={StyleSheet.absoluteFillObject} 
               resizeMode="cover"
             />
+          ) : (
+            <View style={styles.foodPlaceholder}>
+              <Text style={styles.foodPlaceholderEmoji}>
+                {item.category?.toLowerCase().includes('dessert') ? '🍰' : '🍔'}
+              </Text>
+            </View>
           )}
-          <CupStack quantity={quantity} scale={selectedSize?.name === 'Large' ? 1 : selectedSize?.name === 'Small' ? 0.72 : 0.88} />
         </View>
 
         <View style={styles.content}>
@@ -216,34 +246,40 @@ export default function ProductDetailSheet({ visible, item, cafeId, onClose }: P
             {item.description || 'Experience the perfect blend of tradition and craftsmanship. Smooth, bold, and endlessly satisfying.'}
           </Text>
 
-          <View style={styles.caffeinePill}>
-            <AppIcon name="zap" size={13} color={Colors.brand} />
-            <Text style={styles.caffeineText}>
-              <Text style={styles.caffeineStrong}>{totalCaffeine.toFixed(0)} mg</Text> caffeine
-            </Text>
-          </View>
+          {isBeverage && (
+            <View style={styles.caffeinePill}>
+              <AppIcon name="zap" size={13} color={Colors.brand} />
+              <Text style={styles.caffeineText}>
+                <Text style={styles.caffeineStrong}>{totalCaffeine.toFixed(0)} mg</Text> caffeine
+              </Text>
+            </View>
+          )}
 
-          <View style={styles.divider} />
-          <Text style={styles.sectionLabel}>Size</Text>
-          <View style={styles.sizeRow}>
-            {item.sizes?.map((size: any) => {
-              const selected = selectedSize?.name === size.name;
+          {isBeverage && (
+            <>
+              <View style={styles.divider} />
+              <Text style={styles.sectionLabel}>Size</Text>
+              <View style={styles.sizeRow}>
+                {item.sizes?.map((size: any) => {
+                  const selected = selectedSize?.name === size.name;
 
-              return (
-                <TouchableOpacity
-                  key={size.name}
-                  style={[styles.sizeCard, selected && styles.optionActive]}
-                  onPress={() => setSelectedSize(size)}
-                  activeOpacity={0.85}
-                >
-                  <Text style={[styles.sizeLabel, selected && styles.optionActiveText]}>{size.name}</Text>
-                  <Text style={[styles.sizeMeta, selected && styles.optionActiveSubtext]}>
-                    {size.volume} {size.unit}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+                  return (
+                    <TouchableOpacity
+                      key={size.name}
+                      style={[styles.sizeCard, selected && styles.optionActive]}
+                      onPress={() => setSelectedSize(size)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.sizeLabel, selected && styles.optionActiveText]}>{size.name}</Text>
+                      <Text style={[styles.sizeMeta, selected && styles.optionActiveSubtext]}>
+                        {size.volume} {size.unit}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
+          )}
 
           <View style={styles.divider} />
           <Text style={styles.sectionLabel}>Quantity</Text>
@@ -257,29 +293,33 @@ export default function ProductDetailSheet({ visible, item, cafeId, onClose }: P
             </TouchableOpacity>
           </View>
 
-          <View style={styles.divider} />
-          <Text style={styles.sectionLabel}>Milk Type</Text>
-          <View style={[styles.milkRow, width < 360 && styles.milkRowWrap]}>
-            {MILKS.map((milk) => {
-              const selected = selectedMilk === milk.id;
+          {isBeverage && (
+            <>
+              <View style={styles.divider} />
+              <Text style={styles.sectionLabel}>Milk Type</Text>
+              <View style={[styles.milkRow, width < 360 && styles.milkRowWrap]}>
+                {MILKS.map((milk) => {
+                  const selected = selectedMilk === milk.id;
 
-              return (
-                <TouchableOpacity
-                  key={milk.id}
-                  style={[
-                    styles.milkCard, 
-                    selected && styles.optionActive,
-                    width < 360 && styles.milkCardSmall
-                  ]}
-                  onPress={() => setSelectedMilk(milk.id)}
-                  activeOpacity={0.85}
-                >
-                  <AppIcon name={milk.icon} size={19} color={selected ? Colors.white : Colors.secondary} />
-                  <Text style={[styles.milkLabel, selected && styles.optionActiveText]}>{milk.label}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+                  return (
+                    <TouchableOpacity
+                      key={milk.id}
+                      style={[
+                        styles.milkCard, 
+                        selected && styles.optionActive,
+                        width < 360 && styles.milkCardSmall
+                      ]}
+                      onPress={() => setSelectedMilk(milk.id)}
+                      activeOpacity={0.85}
+                    >
+                      <AppIcon name={milk.icon} size={19} color={selected ? Colors.white : Colors.secondary} />
+                      <Text style={[styles.milkLabel, selected && styles.optionActiveText]}>{milk.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
+          )}
 
           <TouchableOpacity
             style={[styles.cta, { marginTop: Spacing.lg }]}
@@ -601,5 +641,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
     letterSpacing: 0.2,
+  },
+  foodPlaceholder: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FAF5EE',
+  },
+  foodPlaceholderEmoji: {
+    fontSize: 54,
   },
 });

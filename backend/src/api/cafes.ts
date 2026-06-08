@@ -83,9 +83,51 @@ router.get('/popular-items', async (req: Request, res: Response) => {
     ...item,
     cafe_name: item.cafe.name,
     cafe_id: item.cafe.id,
+    prep_time: item.prep_time_minutes ? `${item.prep_time_minutes} min` : '10 min',
+    tags: item.tags ? (typeof item.tags === 'string' ? JSON.parse(item.tags) : item.tags) : [],
   }));
 
   return res.json({ success: true, data: formattedItems });
+});
+
+// GET /cafes/filters/categories — get home screen category filter labels
+router.get('/filters/categories', async (req: Request, res: Response) => {
+  try {
+    const setting = await prisma.systemSetting.findFirst({
+      where: { key: 'home_categories' }
+    });
+    
+    const defaultCategories = [
+      { label: 'All' },
+      { label: 'Beverages' },
+      { label: 'Food' },
+      { label: 'Dietary' },
+      { label: 'Work' },
+      { label: 'Social' },
+      { label: 'Outdoor' }
+    ];
+
+    if (!setting) {
+      return res.json({ success: true, data: defaultCategories });
+    }
+
+    try {
+      const parsed = JSON.parse(setting.value);
+      return res.json({ success: true, data: Array.isArray(parsed) ? parsed : defaultCategories });
+    } catch {
+      return res.json({ success: true, data: defaultCategories });
+    }
+  } catch (error) {
+    return res.json({ success: true, data: [
+      { label: 'All' },
+      { label: 'Beverages' },
+      { label: 'Food' },
+      { label: 'Dietary' },
+      { label: 'Work' },
+      { label: 'Social' },
+      { label: 'Outdoor' }
+    ]});
+  }
 });
 
 // GET /cafes/:id
@@ -96,6 +138,11 @@ router.get('/:id', async (req: Request, res: Response) => {
       menu_items: {
         where: { is_available: 1 },
         orderBy: [{ is_popular: 'desc' }, { name: 'asc' }],
+        include: {
+          category: {
+            select: { name: true }
+          }
+        }
       },
     },
   });
@@ -109,7 +156,14 @@ router.get('/:id', async (req: Request, res: Response) => {
     }),
   ]);
 
-  return res.json({ success: true, data: { ...cafe, tables, categories } });
+  const formattedMenuItems = cafe.menu_items.map(item => ({
+    ...item,
+    category: item.category?.name || null,
+    prep_time: item.prep_time_minutes ? `${item.prep_time_minutes} min` : '10 min',
+    tags: item.tags ? (typeof item.tags === 'string' ? JSON.parse(item.tags) : item.tags) : [],
+  }));
+
+  return res.json({ success: true, data: { ...cafe, menu_items: formattedMenuItems, tables, categories } });
 });
 
 // GET /cafes/:id/menu
@@ -138,8 +192,8 @@ router.get('/:id/menu', async (req: Request, res: Response) => {
       .map(item => {
         let sizes = [];
         try {
-          const cust = JSON.parse(item.customizations || '[]');
-          const sizesFound = cust.find((c: any) => c.type === 'size');
+          const customizationsParsed = JSON.parse(item.customizations || '[]');
+          const sizesFound = customizationsParsed.find((c: any) => c.type === 'size');
           if (sizesFound && Array.isArray(sizesFound.options)) {
             sizes = sizesFound.options.map((opt: any) => ({
               name: opt.name,
@@ -164,7 +218,12 @@ router.get('/:id/menu', async (req: Request, res: Response) => {
           ];
         }
 
-        return { ...item, sizes };
+        return {
+          ...item,
+          sizes,
+          prep_time: item.prep_time_minutes ? `${item.prep_time_minutes} min` : '10 min',
+          tags: item.tags ? (typeof item.tags === 'string' ? JSON.parse(item.tags) : item.tags) : [],
+        };
       }),
   }));
 

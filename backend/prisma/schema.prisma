@@ -28,6 +28,10 @@ model User {
   push_token_updated_at DateTime?
   deletion_scheduled_at DateTime?
   terms_accepted_at      DateTime?
+  government_id         String?
+  business_license      String?
+  experience_years      Int?
+  verification_status   String               @default("PENDING")
   created_at            DateTime             @default(now())
   updated_at            DateTime             @updatedAt
   cart_items            CartItem[]
@@ -39,6 +43,7 @@ model User {
   wallet_txs            WalletTransaction[]
   tier_history          LoyaltyTierHistory[]
   redeemed_rewards      RedeemedReward[]
+  owned_cafes           Cafe[]               @relation(name: "UserOwnedCafes")
 
   @@map("users")
 }
@@ -79,6 +84,7 @@ model Cafe {
   is_open           Int            @default(1)
   open_time         String         @default("08:00")
   close_time        String         @default("22:00")
+  reservation_slots String         @default("[\"09:00\",\"11:00\",\"13:00\",\"15:00\",\"17:00\",\"19:00\"]")
   wifi              Int            @default(1)
   parking           Int            @default(0)
   pet_friendly      Int            @default(0)
@@ -89,6 +95,15 @@ model Cafe {
   min_order         Float          @default(0)
   is_active         Int            @default(1)
   upi_id            String?
+  state             String?
+  pincode           String?
+  timezone          String         @default("Asia/Kolkata")
+  emoji             String?
+  cover_color       String?
+  discount          String?
+  total_seats       Int            @default(0)
+  owner_id          String?
+  owner             User?          @relation(name: "UserOwnedCafes", fields: [owner_id], references: [id], onDelete: SetNull)
   created_at        DateTime       @default(now())
   updated_at        DateTime       @updatedAt
   cart_items        CartItem[]
@@ -98,6 +113,7 @@ model Cafe {
   reservations      Reservation[]
   reviews           Review[]
   tables            Table[]
+  promotional_banners Banner[]
 
   @@index([city])
   @@map("cafes")
@@ -147,8 +163,10 @@ model MenuItem {
   is_popular        Int           @default(0)
   prep_time_minutes Int           @default(10)
   calories          Int?
+  caffeine          Int?
   allergens         String        @default("[]")
   customizations    String        @default("[]")
+  tags              String        @default("[]")
   created_at        DateTime      @default(now())
   updated_at        DateTime      @updatedAt
   cart_items        CartItem[]
@@ -343,15 +361,20 @@ model Reward {
   icon           String
   category       String           @default("Food & Drink")
   description    String?
+  terms          String?                              // fine print
   points_cost    Int
-  tier_required  String           @default("SILVER")
-  stock          Int              @default(-1) // -1 for unlimited
+  tier_required  String           @default("SILVER") // SILVER | GOLD | PLATINUM
+  stock          Int              @default(-1)        // -1 = unlimited
   total_redeemed Int              @default(0)
   is_active      Int              @default(1)
+  valid_from     DateTime?
+  valid_until    DateTime?
+  cafe_id        String?                              // null = all cafes
   created_at     DateTime         @default(now())
   updated_at     DateTime         @updatedAt
   redemptions    RedeemedReward[]
 
+  @@index([is_active, tier_required])
   @@map("rewards")
 }
 
@@ -359,7 +382,11 @@ model RedeemedReward {
   id           String   @id
   user_id      String
   reward_id    String
+  order_id     String?             // if applied to an order
   points_spent Int
+  status       String   @default("ACTIVE") // ACTIVE | USED | EXPIRED
+  expires_at   DateTime?
+  used_at      DateTime?
   created_at   DateTime @default(now())
   user         User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
   reward       Reward   @relation(fields: [reward_id], references: [id], onDelete: Cascade)
@@ -368,3 +395,57 @@ model RedeemedReward {
   @@index([reward_id])
   @@map("redeemed_rewards")
 }
+
+model Banner {
+  id                String   @id
+  slider_type       String   @default("PROMO") // PROMO | FOOD_PROMO
+  tag               String
+  tag_icon          String?  // for FOOD_PROMO tag icon (e.g. ⚡)
+  tag_color         String   @default("#FFFFFF")
+  tag_bg            String?  // for FOOD_PROMO tag pill background
+  title             String
+  title_accent      String?  // for PROMO title accent
+  subtitle          String
+  subtitle_color    String?  // for FOOD_PROMO subtitle color
+  cta_text          String
+  cta_bg            String   @default("#FFFFFF")
+  cta_text_color    String   @default("#000000") // maps to ctaText2/ctaTextColor
+  bg_color          String   @default("#000000") // maps to bgColor/bg
+  overlay_color     String?  // for PROMO overlay color
+  stripe_color      String?  // for FOOD_PROMO stripe color
+  emoji             String?
+  emoji_label       String?
+  emoji_label_color String?
+  badge             String?  // for PROMO badge
+  bg_image          String
+  cafe_id           String?
+  cafe              Cafe?    @relation(fields: [cafe_id], references: [id], onDelete: SetNull)
+  is_active         Int      @default(1)
+  sort_order        Int      @default(0)
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  @@map("banners")
+}
+
+model SystemSetting {
+  id          String   @id
+  key         String   @unique
+  value       String
+  type        String
+  category    String
+  description String?
+
+  @@map("system_settings")
+}
+
+model FeatureFlag {
+  id          String   @id
+  name        String
+  key         String   @unique
+  enabled     Boolean
+  description String?
+
+  @@map("feature_flags")
+}
+
