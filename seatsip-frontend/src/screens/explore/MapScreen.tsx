@@ -58,11 +58,14 @@ type Restaurant = {
   image_url?: string;
   tags: string[];
   distance_km?: number;
+  cityName?: string;
 };
 
 const CITIES: City[] = [
   { id: 'bengaluru', name: 'Bengaluru', state: 'Karnataka', lat: 12.9716, lng: 77.5946, zoom_level: 13 },
   { id: 'mumbai', name: 'Mumbai', state: 'Maharashtra', lat: 19.076, lng: 72.8777, zoom_level: 12 },
+  { id: 'bagalkot', name: 'Bagalkot', state: 'Karnataka', lat: 16.1817, lng: 75.6958, zoom_level: 13 },
+  { id: 'belgavi', name: 'Belgavi', state: 'Karnataka', lat: 15.8497, lng: 74.4977, zoom_level: 13 },
   { id: 'delhi', name: 'Delhi', state: 'Delhi', lat: 28.6139, lng: 77.209, zoom_level: 12 },
   { id: 'chennai', name: 'Chennai', state: 'Tamil Nadu', lat: 13.0827, lng: 80.2707, zoom_level: 13 },
   { id: 'hyderabad', name: 'Hyderabad', state: 'Telangana', lat: 17.385, lng: 78.4867, zoom_level: 13 },
@@ -136,6 +139,51 @@ function buildFoodMapRestaurants(city: City): Restaurant[] {
   });
 }
 
+function determineCategory(cafe: any): 'cafe' | 'restaurant' | 'cloud_kitchen' {
+  const name = (cafe.name || '').toLowerCase();
+  const desc = (cafe.description || '').toLowerCase();
+
+  let tags: string[] = [];
+  try {
+    tags = Array.isArray(cafe.tags) ? cafe.tags : JSON.parse(cafe.tags || '[]');
+  } catch {}
+
+  let moods: string[] = [];
+  try {
+    moods = Array.isArray(cafe.moods) ? cafe.moods : JSON.parse(cafe.moods || '[]');
+  } catch {}
+
+  const combined = [
+    name,
+    desc,
+    ...tags.map(t => String(t).toLowerCase()),
+    ...moods.map(m => String(m).toLowerCase())
+  ].join(' ');
+
+  if (combined.includes('kitchen') || combined.includes('cloud') || combined.includes('delivery')) {
+    return 'cloud_kitchen';
+  }
+
+  if (
+    combined.includes('restaurant') ||
+    combined.includes('tiffin') ||
+    combined.includes('biryani') ||
+    combined.includes('meals') ||
+    combined.includes('dine') ||
+    combined.includes('diner') ||
+    combined.includes('cuisine') ||
+    combined.includes('food') ||
+    combined.includes('curry') ||
+    combined.includes('dhaba') ||
+    combined.includes('bakery') ||
+    combined.includes('bites')
+  ) {
+    return 'restaurant';
+  }
+
+  return 'cafe';
+}
+
 function cafeToRestaurant(cafe: any, city: City): Restaurant {
   const lat = Number(cafe.latitude || city.lat);
   const lng = Number(cafe.longitude || city.lng);
@@ -147,13 +195,15 @@ function cafeToRestaurant(cafe: any, city: City): Restaurant {
     tags = [];
   }
 
+  const category = determineCategory(cafe);
+
   return {
     id: cafe.id,
     source: 'seatsip',
     name: cafe.name,
     description: cafe.description || 'Fresh coffee, meals, and table reservations.',
-    cuisine_type: 'Cafe',
-    category: 'cafe',
+    cuisine_type: category === 'cafe' ? 'Cafe' : category === 'restaurant' ? 'Restaurant' : 'Cloud Kitchen',
+    category,
     address: cafe.address,
     lat,
     lng,
@@ -164,6 +214,7 @@ function cafeToRestaurant(cafe: any, city: City): Restaurant {
     image_url: cafe.image_url,
     tags,
     distance_km: Number(distanceKm(city.lat, city.lng, lat, lng).toFixed(1)),
+    cityName: cafe.city || city.name,
   };
 }
 
@@ -229,6 +280,15 @@ function CitySelector({
               onChangeText={setQuery}
             />
           </View>
+
+          {filteredCities.length === 0 && (
+            <View style={styles.noCityContainer}>
+              <View style={styles.alertIconBg}>
+                <AppIcon name="location" size={16} color="#E63946" />
+              </View>
+              <Text style={styles.noCityText}>Service not in this area yet</Text>
+            </View>
+          )}
 
           <FlatList
             data={filteredCities}
@@ -313,7 +373,7 @@ function RestaurantCard({
             <Text style={styles.secondaryButtonText}>{restaurant.distance_km?.toFixed(1) || '0.0'} km</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.primaryButton} onPress={onOrder}>
-            <Text style={styles.primaryButtonText}>{restaurant.source === 'seatsip' ? 'View menu' : 'Explore'}</Text>
+            <Text style={styles.primaryButtonText}>{restaurant.source === 'seatsip' ? 'Order / Reserve' : 'Explore'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -334,6 +394,7 @@ export default function MapScreen() {
   const [category, setCategory] = useState<Category>('all');
   const [query, setQuery] = useState('');
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
+  const [hasRealCafes, setHasRealCafes] = useState(true);
   const [selectedId, setSelectedId] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [showCityPicker, setShowCityPicker] = useState(false);
@@ -344,33 +405,65 @@ export default function MapScreen() {
 
     async function loadRestaurants() {
       setLoading(true);
-      const foodmapRows = buildFoodMapRestaurants(selectedCity);
 
       try {
-        const response = await cafesApi.list({ city: selectedCity.name, limit: 30 });
+        const params: any = { limit: 30 };
+        const searchQuery = query.trim();
+        if (searchQuery) {
+          params.search = searchQuery;
+        } else {
+          params.city = selectedCity.name;
+        }
+
+        const response = await cafesApi.list(params);
         const cafes = response.data?.data || [];
-        const mappedCafes = cafes.map((cafe: any) => cafeToRestaurant(cafe, selectedCity));
-        const rows = selectedCity.id === 'bengaluru' ? [...mappedCafes, ...foodmapRows] : foodmapRows;
+        const mappedCafes = cafes.map((cafe: any) => {
+          const cafeCity = CITIES.find(c => c.name.toLowerCase() === (cafe.city || '').toLowerCase()) || selectedCity;
+          return cafeToRestaurant(cafe, cafeCity);
+        });
 
         if (mounted) {
-          setRestaurants(rows);
-          setSelectedId(rows[0]?.id);
+          setRestaurants(mappedCafes);
+          setHasRealCafes(searchQuery ? true : mappedCafes.length > 0);
+          
+          const firstCafe = mappedCafes[0];
+          setSelectedId(firstCafe?.id);
+
+          // If a search query is active and we found a match, auto-navigate there immediately!
+          if (searchQuery && firstCafe) {
+            // Find matched city
+            const matchedCity = CITIES.find(c => c.name.toLowerCase() === (firstCafe.cityName || '').toLowerCase());
+            if (matchedCity && matchedCity.id !== selectedCity.id) {
+              setSelectedCity(matchedCity);
+            }
+            
+            // Fly the map to the cafe's coordinates
+            setTimeout(() => {
+              mapRef.current?.focusRestaurant?.(firstCafe);
+            }, 600);
+          }
         }
-      } catch {
+      } catch (err) {
+        console.error('Error fetching cafes:', err);
         if (mounted) {
-          setRestaurants(foodmapRows);
-          setSelectedId(foodmapRows[0]?.id);
+          setRestaurants([]);
+          setHasRealCafes(false);
+          setSelectedId(undefined);
         }
       } finally {
         if (mounted) setLoading(false);
       }
     }
 
-    loadRestaurants();
+    const timer = setTimeout(() => {
+      loadRestaurants();
+    }, query.trim() ? 400 : 0);
+
     return () => {
       mounted = false;
+      clearTimeout(timer);
     };
-  }, [selectedCity]);
+  }, [selectedCity, query]);
 
   const visibleRestaurants = useMemo(() => {
     const trimmedQuery = query.trim().toLowerCase();
@@ -423,7 +516,22 @@ export default function MapScreen() {
   }, [route.params?.cafeId, loading, restaurants]);
 
   const selectRestaurant = (restaurant: Restaurant) => {
+    if (selectedId === restaurant.id) {
+      navigation.navigate('CafeDetail', { cafeId: restaurant.id });
+      return;
+    }
+
     setSelectedId(restaurant.id);
+
+    // Auto-switch to the cafe's city if it differs from current selectedCity
+    if (restaurant.cityName) {
+      const matchedCity = CITIES.find(c => c.name.toLowerCase() === restaurant.cityName?.toLowerCase());
+      if (matchedCity && matchedCity.id !== selectedCity.id) {
+        setSelectedCity(matchedCity);
+        setQuery('');
+      }
+    }
+
     const index = visibleRestaurants.findIndex((item) => item.id === restaurant.id);
     if (index >= 0) {
       listRef.current?.scrollTo({ x: index * (CARD_WIDTH + 14), animated: true });
@@ -439,7 +547,7 @@ export default function MapScreen() {
 
   const openRestaurant = (restaurant: Restaurant) => {
     if (restaurant.source === 'seatsip') {
-      navigation.navigate('Menu', { cafeId: restaurant.id, cafeName: restaurant.name });
+      navigation.navigate('CafeDetail', { cafeId: restaurant.id });
       return;
     }
 
@@ -494,14 +602,35 @@ export default function MapScreen() {
         </View>
       )}
 
-      {!loading && visibleRestaurants.length === 0 && (
+      {!loading && !hasRealCafes && (
+        <View style={styles.noServiceCard}>
+          <View style={styles.noServiceHeader}>
+            <View style={styles.alertIconBg}>
+              <AppIcon name="location" size={16} color="#E63946" />
+            </View>
+            <Text style={styles.noServiceTitle}>Service not in this area</Text>
+          </View>
+          <Text style={styles.noServiceSubtitle}>
+            SeatSip is not available in {selectedCity.name} yet. We are expanding rapidly—stay tuned!
+          </Text>
+          <TouchableOpacity 
+            style={styles.changeCityBtn} 
+            onPress={() => setShowCityPicker(true)}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.changeCityBtnText}>Select a registered city</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {!loading && hasRealCafes && visibleRestaurants.length === 0 && (
         <View style={styles.emptyState}>
           <AppIcon name="search" size={22} color="#7B6B5A" />
           <Text style={styles.emptyText}>No places found</Text>
         </View>
       )}
 
-      {visibleRestaurants.length > 0 && (
+      {hasRealCafes && visibleRestaurants.length > 0 && (
         <Animated.View
           style={[
             styles.cardStrip,
@@ -801,6 +930,75 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.46)',
     justifyContent: 'flex-end',
+  },
+  noServiceCard: {
+    position: 'absolute',
+    bottom: 40,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(255, 248, 239, 0.96)',
+    borderRadius: 24,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 15,
+    elevation: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(101, 65, 33, 0.15)',
+    alignItems: 'center',
+    zIndex: 30,
+  },
+  noServiceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  alertIconBg: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(230, 57, 70, 0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noServiceTitle: {
+    color: '#2A1A0E',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  noServiceSubtitle: {
+    color: '#5D4B3D',
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+    marginBottom: 16,
+    paddingHorizontal: 8,
+  },
+  changeCityBtn: {
+    backgroundColor: '#654121',
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    width: '100%',
+    alignItems: 'center',
+  },
+  changeCityBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  noCityContainer: {
+    paddingVertical: 24,
+    alignItems: 'center',
+    gap: 8,
+  },
+  noCityText: {
+    color: '#A8B2C0',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   citySheet: {
     maxHeight: '78%',

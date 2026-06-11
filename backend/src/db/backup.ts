@@ -20,7 +20,16 @@ async function backup() {
   const plain = path.join(dir, `seatsip-${stamp}.dump`);
   const encrypted = `${plain}.age`;
 
-  execFileSync('pg_dump', ['--dbname', databaseUrl, '-Fc', '-f', plain], { stdio: 'inherit' });
+  let dbPath = databaseUrl;
+  if (dbPath.startsWith('file:')) {
+    dbPath = dbPath.slice(5);
+  }
+
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`Database file not found at: ${dbPath}`);
+  }
+
+  fs.copyFileSync(dbPath, plain);
   execFileSync('age', ['-r', recipient, '-o', encrypted, plain], { stdio: 'inherit' });
   execFileSync('aws', ['s3', 'cp', encrypted, `${destination}/seatsip-${stamp}.dump.age`], { stdio: 'inherit' });
   fs.rmSync(dir, { recursive: true, force: true });

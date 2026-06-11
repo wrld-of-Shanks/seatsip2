@@ -382,13 +382,7 @@ function createMarkerElement(
   element.textContent = markerLabel(restaurant.category);
 
   element.addEventListener('click', () => {
-    if (selected && mapContainer) {
-      // Selected marker → ring loader → gallery
-      setupMarkerClick(element, mapContainer, restaurant.name, onGalleryOpen, onGalleryClose);
-    } else {
-      // Non-selected marker → focus on map + select card
-      onSelect(restaurant);
-    }
+    onSelect(restaurant);
   });
 
   return element;

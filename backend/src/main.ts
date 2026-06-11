@@ -33,7 +33,7 @@ async function boot() {
     }
     console.log(`
 🚀 SeatSip API running on http://localhost:${PORT}
-📦 Database: PostgreSQL (Prisma)
+📦 Database: SQLite (Prisma)
 📋 Endpoints:
    POST   /api/v1/auth/register
    POST   /api/v1/auth/login
