@@ -1,0 +1,225 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+
+@layer base {
+  body {
+    @apply text-on-surface font-body selection:bg-primary-fixed selection:text-on-primary-fixed;
+    min-height: 100vh;
+  }
+}
+
+/* ── Full-screen cafe background ── */
+.cafe-bg-root {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: url('/cafe-bg.jpg') center center / cover no-repeat fixed;
+}
+.cafe-bg-root::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 12, 8, 0.52);
+}
+
+@layer components {
+  /* ── Enhanced Glassmorphism panels ── */
+  .glass-panel {
+    background: rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    box-shadow:
+      0 8px 32px rgba(100, 60, 30, 0.18),
+      inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  }
+
+  /* Sidebar glass */
+  .glass-sidebar {
+    background: rgba(255, 255, 255, 0.14);
+    backdrop-filter: blur(32px) saturate(160%);
+    -webkit-backdrop-filter: blur(32px) saturate(160%);
+    border-right: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 4px 0 24px rgba(80, 40, 10, 0.12);
+  }
+
+  /* Topbar glass */
+  .glass-header {
+    background: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(28px) saturate(160%);
+    -webkit-backdrop-filter: blur(28px) saturate(160%);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 24px rgba(80, 40, 10, 0.10);
+  }
+
+  /* Stat card hover glow */
+  .glass-panel:hover {
+    background: rgba(255, 255, 255, 0.24);
+    box-shadow:
+      0 12px 40px rgba(100, 60, 30, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    transition: all 0.3s ease;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #e7bdb1;
+    border-radius: 10px;
+  }
+}
+
+/* ── Global Glassmorphism Class Mapper Overrides ── */
+
+/* Transform typical white card panels to glass cards */
+.bg-white.border.border-stone-200,
+.bg-white.border.border-stone-100,
+.bg-white.border.border-stone-200\/60,
+.bg-white.border.border-stone-200\/50,
+.bg-white.border.border-white\/60,
+.bg-stone-50.border.border-stone-100,
+.bg-surface-container-low,
+.bg-white\/40.backdrop-blur-xl {
+  background: rgba(255, 255, 255, 0.18) !important;
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.32) !important;
+  box-shadow: 0 8px 32px rgba(80, 40, 15, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
+}
+
+/* Sub-card backgrounds within glass panels */
+.bg-stone-50 {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+}
+
+/* Glassify sidebars & modal containers */
+.fixed.right-0.bg-white,
+.relative.bg-white.rounded-lg.shadow-xl,
+.flex-1.bg-white {
+  background: rgba(26, 18, 14, 0.88) !important;
+  backdrop-filter: blur(36px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(36px) saturate(160%) !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.22) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.22) !important;
+}
+.sticky.top-0.bg-white,
+.border-b.border-stone-100.bg-stone-50\/50,
+.border-b.border-stone-200 {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18) !important;
+}
+
+/* Glassify text inputs, date pickers, selects, and textareas */
+input[type="date"],
+input[type="time"],
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="tel"],
+input[type="password"],
+select,
+textarea {
+  background: rgba(255, 255, 255, 0.14) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.24) !important;
+  color: #ffffff !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
+}
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
+select option {
+  background-color: #261a15 !important;
+  color: #ffffff !important;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: rgba(255, 223, 159, 0.6) !important;
+  box-shadow: 0 0 0 3px rgba(255, 223, 159, 0.25) !important;
+}
+input::placeholder,
+textarea::placeholder {
+  color: rgba(255, 255, 255, 0.5) !important;
+}
+
+/* Typography readability adjustments inside Layout & panels */
+.text-stone-900,
+.text-stone-800,
+.text-stone-700,
+.text-stone-600,
+.text-stone-500,
+.text-on-surface,
+.text-on-surface-variant {
+  color: rgba(255, 255, 255, 0.92) !important;
+}
+.text-stone-400 {
+  color: rgba(255, 255, 255, 0.62) !important;
+}
+.text-stone-300 {
+  color: rgba(255, 255, 255, 0.45) !important;
+}
+.text-secondary {
+  color: #ffdf9f !important;
+}
+
+/* Tables styling */
+table,
+tbody,
+thead,
+tr,
+th,
+td {
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+th {
+  color: rgba(255, 255, 255, 0.65) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18) !important;
+}
+td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+.divide-stone-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+.border-t.border-stone-200 {
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Buttons inside tables/grids */
+button.bg-white,
+button.bg-white\/60,
+button.border-stone-200 {
+  background: rgba(255, 255, 255, 0.16) !important;
+  border: 1px solid rgba(255, 255, 255, 0.25) !important;
+  color: #ffffff !important;
+}
+button.bg-white:hover,
+button.bg-white\/60:hover {
+  background: rgba(255, 255, 255, 0.25) !important;
+}
+button.bg-\[\#2c160e\],
+button.bg-primary {
+  background: linear-gradient(135deg, #74554b, #5d4037) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+.bg-stone-100 {
+  background: rgba(255, 255, 255, 0.12) !important;
+}
+.border-stone-200\/50,
+.border-stone-200\/60 {
+  border-color: rgba(255, 255, 255, 0.25) !important;
+}
+
+

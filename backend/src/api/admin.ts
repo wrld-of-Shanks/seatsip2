@@ -13,6 +13,30 @@ router.use(authenticate);
 
 const adminOnly = requireRole('ADMIN');
 const managerOnly = requireRole('ADMIN', 'CAFE_OWNER');
+const requireAdmin = adminOnly;
+const requireAdminOrOwner = managerOnly;
+
+const tryParse = <T>(value: string | null | undefined, fallback: T): T => {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+};
+
+const mapCafe = (cafe: any) => ({
+  ...cafe,
+  imageUrl: cafe.image_url,
+  isActive: cafe.is_active === 1,
+  isOpen: cafe.is_open === 1,
+  reviewCount: cafe.review_count,
+  coverColor: cafe.cover_color,
+  tags: tryParse(cafe.tags, []),
+  moods: tryParse(cafe.moods, []),
+  images: tryParse(cafe.images, []),
+  reservation_slots: tryParse(cafe.reservation_slots, []),
+});
 
 /**
  * @route GET /api/v1/admin/stats
@@ -996,7 +1020,12 @@ router.patch('/users/:id/status', adminOnly, audit('CHANGE_STATUS', 'user'), asy
 router.get('/cafe-owners', adminOnly, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const owners = await prisma.user.findMany({
-      where: { role: 'CAFE_OWNER' },
+      where: {
+        role: 'CAFE_OWNER',
+        is_active: 0,
+        auth_provider: 'owner_pending',
+        verification_status: { in: ['PENDING', 'PENDING_APPROVAL'] },
+      },
       select: {
         id: true,
         name: true,
@@ -1009,6 +1038,25 @@ router.get('/cafe-owners', adminOnly, async (req: AuthenticatedRequest, res: Res
         verification_status: true,
         avatar: true,
         created_at: true,
+        owned_cafes: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            address: true,
+            city: true,
+            phone: true,
+            email: true,
+            images: true,
+            open_time: true,
+            close_time: true,
+            tags: true,
+            is_active: true,
+            created_at: true,
+          },
+          orderBy: { created_at: 'desc' },
+          take: 1,
+        },
         _count: {
           select: { owned_cafes: true }
         }
@@ -1028,6 +1076,22 @@ router.get('/cafe-owners', adminOnly, async (req: AuthenticatedRequest, res: Res
       verificationStatus: o.verification_status,
       avatar: o.avatar,
       createdAt: o.created_at,
+      applicationCafe: o.owned_cafes[0]
+        ? {
+            id: o.owned_cafes[0].id,
+            name: o.owned_cafes[0].name,
+            description: o.owned_cafes[0].description,
+            address: o.owned_cafes[0].address,
+            city: o.owned_cafes[0].city,
+            phone: o.owned_cafes[0].phone,
+            email: o.owned_cafes[0].email,
+            images: tryParse(o.owned_cafes[0].images, []),
+            openingHours: `${o.owned_cafes[0].open_time} - ${o.owned_cafes[0].close_time}`,
+            tags: tryParse(o.owned_cafes[0].tags, []),
+            isActive: o.owned_cafes[0].is_active === 1,
+            createdAt: o.owned_cafes[0].created_at,
+          }
+        : null,
       _count: {
         ownedCafes: o._count.owned_cafes
       }
@@ -3122,12 +3186,17 @@ router.patch('/cafe-owners/:id', requireAdmin, audit('ADMIN_UPDATE_CAFE_OWNER', 
 router.post('/cafe-owners/:id/approve', requireAdmin, audit('ADMIN_APPROVE_CAFE_OWNER', 'user'), async (req: AuthenticatedRequest, res: Response) => {
   const owner = await prisma.user.update({
     where: { id: req.params.id },
-    data: { role: 'CAFE_OWNER', is_active: 1, auth_provider: 'password' },
-    select: { email: true },
+    data: { role: 'CAFE_OWNER', is_active: 1, auth_provider: 'password', verification_status: 'APPROVED' },
+    select: { id: true, email: true },
   });
 
   await prisma.cafe.updateMany({
-    where: { email: owner.email },
+    where: {
+      OR: [
+        { owner_id: owner.id },
+        { email: owner.email },
+      ],
+    },
     data: { is_active: 1 },
   });
 
@@ -3135,18 +3204,30 @@ router.post('/cafe-owners/:id/approve', requireAdmin, audit('ADMIN_APPROVE_CAFE_
 });
 
 router.post('/cafe-owners/:id/reject', requireAdmin, audit('ADMIN_REJECT_CAFE_OWNER', 'user'), async (req: AuthenticatedRequest, res: Response) => {
-  const owner = await prisma.user.update({
+  const owner = await prisma.user.findUnique({
     where: { id: req.params.id },
-    data: { role: 'CAFE_OWNER', is_active: 0, auth_provider: 'owner_rejected' },
-    select: { email: true },
+    select: { id: true, email: true, auth_provider: true, is_active: true },
   });
 
-  await prisma.cafe.updateMany({
-    where: { email: owner.email },
-    data: { is_active: 0 },
+  if (!owner) {
+    return res.status(404).json({ success: false, message: 'Cafe owner application not found' });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.cafe.deleteMany({
+      where: {
+        is_active: 0,
+        OR: [
+          { owner_id: owner.id },
+          { email: owner.email },
+        ],
+      },
+    });
+
+    await tx.user.delete({ where: { id: owner.id } });
   });
 
-  return res.json({ success: true, status: 'REJECTED', message: 'Cafe owner rejected' });
+  return res.json({ success: true, status: 'REJECTED', message: 'Cafe owner application denied and deleted' });
 });
 
 router.delete('/cafe-owners/:id', requireAdmin, audit('ADMIN_DELETE_CAFE_OWNER', 'user'), async (req: AuthenticatedRequest, res: Response) => {
@@ -3447,4 +3528,3 @@ router.get('/rewards/redemptions', requireAdminOrOwner, async (_req: Authenticat
 });
 
 export default router;
-
