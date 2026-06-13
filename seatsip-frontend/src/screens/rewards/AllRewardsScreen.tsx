@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,12 +9,16 @@ import {
   StatusBar,
   Dimensions,
   ImageBackground,
+  Modal,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { ArrowLeft, Wifi, Battery, Search, Home, QrCode, Gift, User, Lock, Bolt, ArrowRight, Coffee, Info, Zap } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppIcon from '../../components/ui/AppIcon';
 import { useAuth } from '../../context/AuthContext';
+import { rewardsApi } from '../../services/api';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -98,42 +102,174 @@ const TABS = ['All', 'Food & Drink', 'Experience', 'Merch'];
 export default function AllRewardsScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [activeTab, setActiveTab] = useState('All');
 
   const points = user?.loyalty_points ?? 340;
+  const userTier = user?.loyalty_tier?.toLowerCase() || 'silver';
+  const tierDisplay = userTier === 'platinum' ? 'Cream' : userTier === 'gold' ? 'Caramel' : 'Coffee';
 
-  const nextTierPoints = 1000;
-  const ptsToNext = nextTierPoints - points;
-  const progress = (points / nextTierPoints) * 100;
+  // State
+  const [rewardsList, setRewardsList] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [apiError, setApiError] = useState('');
+  const [redemptionError, setRedemptionError] = useState('');
+  const [showRedemptionSuccess, setShowRedemptionSuccess] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
+  const [isRedeeming, setIsRedeeming] = useState(false);
+  
+  // Selection/Redeem Modals
+  const [selectedReward, setSelectedReward] = useState<any | null>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
-  const filteredRewards = REWARDS.filter(r => activeTab === 'All' || r.category === activeTab);
+  // Dynamic progress range calculations
+  const currentTierMin = userTier === 'platinum' ? 4000 : userTier === 'gold' ? 2000 : 0;
+  const nextTierMax = userTier === 'platinum' ? 4000 : userTier === 'gold' ? 4000 : 2000;
+  const progressPct = useMemo(() => {
+    if (userTier === 'platinum') return 100;
+    const range = nextTierMax - currentTierMin;
+    const earned = points - currentTierMin;
+    return Math.min(100, Math.max(0, (earned / range) * 100));
+  }, [points, userTier, currentTierMin, nextTierMax]);
 
-  const silverRewards = filteredRewards.filter(r => r.tier === 'Coffee');
-  const goldRewards = filteredRewards.filter(r => r.tier === 'Caramel');
-  const platinumRewards = filteredRewards.filter(r => r.tier === 'Cream');
+  const getFallbackRewards = useCallback(() => {
+    const rankMap: Record<string, number> = { silver: 1, gold: 2, platinum: 3 };
+    const userRank = rankMap[userTier] || 1;
 
-  const renderRewardCard = (reward: any) => (
-    <TouchableOpacity 
-      key={reward.id} 
-      style={[styles.rewardCard, !reward.unlocked && styles.rewardCardLocked]}
-      activeOpacity={reward.unlocked ? 0.8 : 1}
-    >
-      {!reward.unlocked && (
-        <View style={styles.lockOverlay}>
-          <Lock size={14} color="#999" />
+    return REWARDS.map(r => {
+      const tierReq = r.tier.toLowerCase() === 'coffee' ? 'silver' : r.tier.toLowerCase() === 'caramel' ? 'gold' : 'platinum';
+      const reqRank = rankMap[tierReq] || 1;
+      const canAccess = userRank >= reqRank;
+      const canRedeem = canAccess && points >= r.points;
+      
+      return {
+        id: r.id,
+        name: r.name,
+        points_cost: r.points,
+        tier_required: tierReq.toUpperCase(),
+        category: r.category,
+        icon: r.icon,
+        canAccess,
+        canRedeem,
+        pointsShortfall: Math.max(0, r.points - points),
+      };
+    });
+  }, [userTier, points]);
+
+  const fetchRewards = useCallback(() => {
+    setLoading(true);
+    setApiError('');
+    rewardsApi.list()
+      .then((res) => {
+        if (res.data?.success) {
+          setRewardsList(res.data.rewards || []);
+        } else {
+          setApiError('Failed to load rewards');
+          setRewardsList(getFallbackRewards());
+        }
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error('Error fetching rewards:', err);
+        setApiError('Error connecting to rewards service');
+        setRewardsList(getFallbackRewards());
+        setLoading(false);
+      });
+  }, [getFallbackRewards]);
+
+  useEffect(() => {
+    refreshUser();
+    fetchRewards();
+  }, [refreshUser, fetchRewards]);
+
+  const handleRewardPress = (reward: any) => {
+    if (!reward.canAccess) {
+      const reqTierDisplay = reward.tier_required === 'SILVER' ? 'Coffee' : reward.tier_required === 'GOLD' ? 'Caramel' : 'Cream';
+      Alert.alert(
+        'Tier Locked',
+        `This reward requires the premium ${reqTierDisplay} membership tier. Purchase/Upgrade your tier on the Rewards page.`
+      );
+      return;
+    }
+    if (!reward.canRedeem) {
+      Alert.alert(
+        'Insufficient Points',
+        `You need ${reward.pointsShortfall} more points to redeem this reward. Keep visiting and ordering to earn more points!`
+      );
+      return;
+    }
+    
+    setSelectedReward(reward);
+    setShowConfirmModal(true);
+    setRedemptionError('');
+  };
+
+  const confirmRedemption = async () => {
+    if (!selectedReward) return;
+    
+    setIsRedeeming(true);
+    setRedemptionError('');
+    
+    try {
+      const res = await rewardsApi.redeem(selectedReward.id);
+      if (res.data?.success) {
+        setSuccessMsg(res.data?.message || `Successfully redeemed ${selectedReward.name}!`);
+        setShowConfirmModal(false);
+        setSelectedReward(null);
+        setShowRedemptionSuccess(true);
+        
+        refreshUser();
+        fetchRewards();
+      } else {
+        setRedemptionError(res.data?.message || 'Redemption failed. Please try again.');
+      }
+    } catch (err: any) {
+      console.error('Error redeeming reward:', err);
+      setRedemptionError(err.response?.data?.message || err.message || 'Redemption request failed');
+    } finally {
+      setIsRedeeming(false);
+    }
+  };
+
+  const filteredRewards = rewardsList.filter(r => activeTab === 'All' || r.category === activeTab);
+
+  const silverRewards = filteredRewards.filter(r => r.tier_required === 'SILVER');
+  const goldRewards = filteredRewards.filter(r => r.tier_required === 'GOLD');
+  const platinumRewards = filteredRewards.filter(r => r.tier_required === 'PLATINUM');
+
+  const renderRewardCard = (reward: any) => {
+    const isUnlocked = reward.canAccess;
+    const isRedeemable = reward.canRedeem;
+    const reqTierDisplay = reward.tier_required === 'SILVER' ? 'Coffee' : reward.tier_required === 'GOLD' ? 'Caramel' : 'Cream';
+    
+    return (
+      <TouchableOpacity 
+        key={reward.id} 
+        style={[styles.rewardCard, !isUnlocked && styles.rewardCardLocked]}
+        activeOpacity={isUnlocked ? 0.8 : 1}
+        onPress={() => handleRewardPress(reward)}
+      >
+        {!isUnlocked && (
+          <View style={styles.lockOverlay}>
+            <AppIcon name="lock" size={14} color="#999" />
+          </View>
+        )}
+        <Text style={styles.rewardIcon}>{reward.icon || '🎁'}</Text>
+        <Text style={styles.rewardName} numberOfLines={2}>{reward.name}</Text>
+        <View style={styles.rewardMeta}>
+          <Text style={[styles.pointsCost, !isRedeemable && isUnlocked && { color: '#888' }]}>
+            {reward.points_cost} pts
+          </Text>
+          <View style={[
+            styles.tierTag, 
+            reward.tier_required === 'SILVER' ? styles.tagCoffee : reward.tier_required === 'GOLD' ? styles.tagCaramel : styles.tagCream
+          ]}>
+            <Text style={styles.tierTagText}>{reqTierDisplay}</Text>
+          </View>
         </View>
-      )}
-      <Text style={styles.rewardIcon}>{reward.icon}</Text>
-      <Text style={styles.rewardName} numberOfLines={2}>{reward.name}</Text>
-      <View style={styles.rewardMeta}>
-        <Text style={styles.pointsCost}>{reward.points} pts</Text>
-        <View style={[styles.tierTag, reward.tier === 'Coffee' ? styles.tagCoffee : reward.tier === 'Caramel' ? styles.tagCaramel : styles.tagCream]}>
-          <Text style={styles.tierTagText}>{reward.tier}</Text>
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <ImageBackground 
@@ -165,18 +301,20 @@ export default function AllRewardsScreen() {
                 <Text style={styles.pointsValue}>{points}</Text>
                 <Text style={styles.pointsUnit}> pts</Text>
               </View>
-
             </View>
             <View style={styles.tierBadge}>
-              <View style={styles.tierPill}>
-                <Text style={styles.tierPillText}>Coffee</Text>
+              <View style={[
+                styles.tierPill,
+                userTier === 'silver' ? styles.tagCoffee : userTier === 'gold' ? styles.tagCaramel : styles.tagCream
+              ]}>
+                <Text style={styles.tierPillText}>{tierDisplay}</Text>
               </View>
               <View style={styles.progressBarTrack}>
-                <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
+                <View style={[styles.progressBarFill, { width: `${progressPct}%` }]} />
               </View>
               <View style={styles.progressEndLabels}>
-                <Text style={styles.progressEndLabel}>0</Text>
-                <Text style={styles.progressEndLabel}>1000</Text>
+                <Text style={styles.progressEndLabel}>{currentTierMin}</Text>
+                <Text style={styles.progressEndLabel}>{userTier === 'platinum' ? 'Max' : nextTierMax}</Text>
               </View>
             </View>
           </View>
@@ -201,50 +339,130 @@ export default function AllRewardsScreen() {
             ))}
           </ScrollView>
 
-          {/* Silver Section */}
-          {silverRewards.length > 0 && (
+          {loading ? (
+            <View style={{ paddingVertical: 60, alignItems: 'center' }}>
+              <ActivityIndicator size="large" color="#6D3914" />
+              <Text style={{ marginTop: 12, color: '#6D3914', fontWeight: '600' }}>Loading rewards...</Text>
+            </View>
+          ) : (
             <>
-              <Text style={styles.sectionLabel}>Unlocked · Coffee</Text>
-              <View style={styles.rewardGrid}>
-                {silverRewards.map(renderRewardCard)}
-              </View>
-            </>
-          )}
+              {/* Silver Section */}
+              {silverRewards.length > 0 && (
+                <>
+                  <Text style={styles.sectionLabel}>Unlocked · Coffee</Text>
+                  <View style={styles.rewardGrid}>
+                    {silverRewards.map(renderRewardCard)}
+                  </View>
+                </>
+              )}
 
-          {/* Gold Section */}
-          {goldRewards.length > 0 && (
-            <>
-              <Text style={styles.sectionLabel}>Caramel Tier Required</Text>
-              <View style={styles.rewardGrid}>
-                {goldRewards.map(renderRewardCard)}
-              </View>
-            </>
-          )}
+              {/* Gold Section */}
+              {goldRewards.length > 0 && (
+                <>
+                  <Text style={styles.sectionLabel}>Caramel Tier Required</Text>
+                  <View style={styles.rewardGrid}>
+                    {goldRewards.map(renderRewardCard)}
+                  </View>
+                </>
+              )}
 
-          {/* Platinum Section */}
-          {platinumRewards.length > 0 && (
-            <>
-              <Text style={styles.sectionLabel}>Cream Tier Required</Text>
-              <View style={styles.rewardGrid}>
-                {platinumRewards.map(renderRewardCard)}
-              </View>
+              {/* Platinum Section */}
+              {platinumRewards.length > 0 && (
+                <>
+                  <Text style={styles.sectionLabel}>Cream Tier Required</Text>
+                  <View style={styles.rewardGrid}>
+                    {platinumRewards.map(renderRewardCard)}
+                  </View>
+                </>
+              )}
             </>
           )}
 
           {/* Bottom CTA */}
-          <TouchableOpacity style={styles.bottomCta} activeOpacity={0.9}>
+          <TouchableOpacity 
+            style={styles.bottomCta} 
+            activeOpacity={0.9}
+            onPress={() => navigation.goBack()}
+          >
             <View style={styles.ctaIconBox}>
               <Zap size={18} color="#B8860B" fill="#B8860B" />
             </View>
             <View style={styles.ctaTextBox}>
-              <Text style={styles.ctaTitle}>Need 50 more points?</Text>
-              <Text style={styles.ctaSub}>Write a review to unlock your first reward</Text>
+              <Text style={styles.ctaTitle}>Upgrade Your Tier</Text>
+              <Text style={styles.ctaSub}>Purchase premium tiers to unlock higher tier rewards instantly</Text>
             </View>
             <ArrowRight size={20} color="#999" />
           </TouchableOpacity>
 
           <View style={{ height: 40 }} />
         </ScrollView>
+
+        {/* ── Redemption Confirmation Modal ── */}
+        <Modal
+          visible={showConfirmModal}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowConfirmModal(false)}
+        >
+          <View style={modalStyles.overlay}>
+            <View style={modalStyles.card}>
+              <Text style={modalStyles.title}>Redeem Reward?</Text>
+              {selectedReward && (
+                <>
+                  <Text style={modalStyles.rewardNameLabel}>{selectedReward.name}</Text>
+                  <Text style={modalStyles.pointsCostLabel}>Cost: {selectedReward.points_cost} points</Text>
+                </>
+              )}
+              {redemptionError ? (
+                <Text style={modalStyles.errorMsg}>{redemptionError}</Text>
+              ) : null}
+              <View style={modalStyles.btnRow}>
+                <TouchableOpacity
+                  style={[modalStyles.dialogBtn, modalStyles.cancelBtn]}
+                  onPress={() => setShowConfirmModal(false)}
+                  disabled={isRedeeming}
+                >
+                  <Text style={modalStyles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[modalStyles.dialogBtn, modalStyles.confirmBtn]}
+                  onPress={confirmRedemption}
+                  disabled={isRedeeming}
+                >
+                  {isRedeeming ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <Text style={modalStyles.confirmBtnText}>Redeem</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* ── Redemption Success Modal ── */}
+        <Modal
+          visible={showRedemptionSuccess}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowRedemptionSuccess(false)}
+        >
+          <View style={modalStyles.overlay}>
+            <View style={modalStyles.card}>
+              <View style={modalStyles.successBadge}>
+                <AppIcon name="check" size={32} color="#FFF" />
+              </View>
+              <Text style={modalStyles.title}>Redeemed!</Text>
+              <Text style={modalStyles.subtitle}>{successMsg}</Text>
+              <TouchableOpacity
+                style={modalStyles.successBtn}
+                onPress={() => setShowRedemptionSuccess(false)}
+              >
+                <Text style={modalStyles.successBtnText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </ImageBackground>
   );
@@ -504,5 +722,111 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     marginTop: 2,
+  },
+});
+
+const modalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(57, 29, 14, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  card: {
+    backgroundColor: '#FAF3E8',
+    borderRadius: 24,
+    padding: 28,
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 320,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#3F1D0E',
+    marginBottom: 12,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#6D3914',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  rewardNameLabel: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#6D3914',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  pointsCostLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#B8860B',
+    marginBottom: 20,
+  },
+  errorMsg: {
+    color: '#D32F2F',
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  btnRow: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  dialogBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelBtn: {
+    backgroundColor: '#FFF',
+    borderWidth: 1.5,
+    borderColor: '#E4CDB0',
+  },
+  cancelBtnText: {
+    color: '#6D3914',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  confirmBtn: {
+    backgroundColor: '#6D3914',
+  },
+  confirmBtnText: {
+    color: '#FFF',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  successBadge: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#4CAF50',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  successBtn: {
+    backgroundColor: '#6D3914',
+    borderRadius: 50,
+    paddingVertical: 12,
+    paddingHorizontal: 36,
+  },
+  successBtnText: {
+    color: '#FFF',
+    fontWeight: '800',
+    fontSize: 14,
   },
 });

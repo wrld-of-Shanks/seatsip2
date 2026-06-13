@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { bannersApi } from '../../services/api';
+import { exploreCategoriesApi } from '../../services/api';
 import {
   View,
   Text,
@@ -95,17 +95,17 @@ export default function ExploreScreen() {
     let active = true;
     async function loadCards() {
       try {
-        const { data } = await bannersApi.list({ slider_type: 'EXPLORE' });
-        if (active && data?.success && Array.isArray(data.data) && data.data.length > 0) {
-          const mapped = data.data.map((b: any) => ({
-            id: b.id,
-            title: b.title,
-            description: b.subtitle,
-            time: b.tag,
-            timeColor: b.tagColor || '#2D6A4F',
-            timeBg: b.tagBg || '#D8F3DC',
-            image: b.bgImage ? { uri: b.bgImage } : require('../../assets/images/explore/matcha_1.png'),
-            cafeId: b.cafeId,
+        const { data } = await exploreCategoriesApi.list();
+        if (active && data?.success && Array.isArray(data.data)) {
+          const mapped = data.data.map((cat: any) => ({
+            id: cat.id,
+            title: cat.name,
+            slug: cat.slug,
+            description: cat.description || '',
+            time: cat.tag || 'Explore',
+            timeColor: cat.tagColor || '#2D6A4F',
+            timeBg: cat.tagBg || '#D8F3DC',
+            image: cat.imageUrl ? { uri: cat.imageUrl } : require('../../assets/images/explore/matcha_1.png'),
           }));
           setCards(mapped);
         }
@@ -120,14 +120,10 @@ export default function ExploreScreen() {
   }, []);
 
   const handleCardPress = (item: any) => {
-    if (item.cafeId) {
-      navigation.navigate('CafeDetail', { cafeId: item.cafeId });
-    } else {
-      navigation.navigate('CafeList', { 
-        title: item.title,
-        filter: item.title.toLowerCase().replace(' ', '_')
-      });
-    }
+    navigation.navigate('ExploreItems', { 
+      categorySlug: item.slug,
+      categoryName: item.title 
+    });
   };
 
   return (

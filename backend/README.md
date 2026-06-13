@@ -45,13 +45,14 @@ Server runs at: **http://localhost:3000**
 ## API Endpoints
 
 ### Auth
-| Method | Path                        | Auth | Description          |
-|--------|-----------------------------|------|----------------------|
-| POST   | /api/v1/auth/register       | No   | Register new user    |
-| POST   | /api/v1/auth/login          | No   | Login                |
-| POST   | /api/v1/auth/refresh        | No   | Refresh access token |
-| POST   | /api/v1/auth/logout         | Yes  | Logout               |
-| GET    | /api/v1/auth/me             | Yes  | Get current user     |
+| Method | Path                        | Auth | Description             |
+|--------|-----------------------------|------|-------------------------|
+| POST   | /api/v1/auth/register       | No   | Register new user       |
+| POST   | /api/v1/auth/login          | No   | Login                   |
+| POST   | /api/v1/auth/refresh        | No   | Refresh access token    |
+| POST   | /api/v1/auth/logout         | Yes  | Logout                  |
+| GET    | /api/v1/auth/me             | Yes  | Get current user        |
+| GET    | /api/v1/auth/check-email    | No   | Check email availability|
 
 ### Cafes
 | Method | Path                        | Auth | Description             |

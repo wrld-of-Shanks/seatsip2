@@ -190,7 +190,7 @@ export const cafesApi = {
     api.post(`/cafes/${id}/reviews`, data),
   addImage: (id: string, imageUrl: string) =>
     api.post(`/cafes/${id}/images`, { imageUrl }),
-  getPopularItems: (limit?: number) => api.get('/cafes/popular-items', { params: { limit } }),
+  getPopularItems: (params?: { limit?: number; lat?: number; lng?: number; sort?: string }) => api.get('/cafes/popular-items', { params }),
 };
 
 // ===== Orders =====
@@ -269,11 +269,22 @@ export const rewardsApi = {
   list: () => api.get('/rewards'),
   redeem: (id: string) => api.post(`/rewards/${id}/redeem`),
   earn: (action: 'VISIT' | 'REVIEW' | 'REFERRAL' | 'CHECKIN') => api.post('/rewards/earn', { action }),
+  purchaseTier: (data: { tierId: string; amount: number; paymentMethod: 'CARD' | 'UPI' }) => api.post('/rewards/purchase-tier', data),
 };
 
 // ===== Banners =====
 export const bannersApi = {
   list: (params?: { slider_type?: string }) => api.get('/banners', { params }),
+};
+
+// ===== Explore Categories =====
+export const exploreCategoriesApi = {
+  list: () => api.get('/explore-categories'),
+};
+
+// ===== Menu Items =====
+export const menuApi = {
+  list: (params?: { cafeId?: string; exploreCategory?: string }) => api.get('/menu/items', { params }),
 };
 
 export default api;

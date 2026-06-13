@@ -80,83 +80,49 @@ async function main() {
   });
   console.log(`Cleared ${deleted.count} old explore banners.`);
 
-  // 4. Create the 4 explore banners from ExploreScreen.tsx
-  const exploreBannersData = [
+  // 4. Create the 3 explore categories in ExploreCategory model
+  const exploreCategories = [
     {
       id: uuidv4(),
-      slider_type: 'EXPLORE',
+      name: 'Matcha Moments',
+      slug: 'matcha-moments',
+      description: 'Smooth, earthy matcha creations crafted for a refreshing and calming experience.',
       tag: 'Premium',
       tag_color: '#2D6A4F',
-      tag_bg: '#D8F3DC',
-      title: 'Matcha Moments',
-      subtitle: 'Smooth, earthy matcha creations crafted for a refreshing and calming experience.',
-      cta_text: 'Explore',
-      cta_bg: '#2D6A4F',
-      cta_text_color: '#FFFFFF',
-      bg_color: '#1A3326',
-      bg_image: 'https://images.unsplash.com/photo-1536256263959-770b48d82b0a?q=80&w=800&auto=format&fit=crop',
-      cafe_id: null,
-      is_active: 1,
+      tag_bg: 'rgba(45,106,79,0.2)',
+      image_url: 'https://images.unsplash.com/photo-1536256263959-770b48d82b0a?q=80&w=800&auto=format&fit=crop',
       sort_order: 1,
     },
     {
       id: uuidv4(),
-      slider_type: 'EXPLORE',
+      name: 'Sweet Cravings',
+      slug: 'sweet-cravings',
+      description: 'Decadent desserts, fluffy waffles, creamy cakes, and treats made to satisfy every craving.',
       tag: 'Sweet',
       tag_color: '#7B4F00',
-      tag_bg: '#FFE8A3',
-      title: 'Sweet Cravings',
-      subtitle: 'Decadent desserts, fluffy waffles, creamy cakes, and treats made to satisfy every craving.',
-      cta_text: 'Explore',
-      cta_bg: '#FFE8A3',
-      cta_text_color: '#7B4F00',
-      bg_color: '#33201A',
-      bg_image: 'https://images.unsplash.com/photo-1571877227200-a0d98ea607e9?q=80&w=800&auto=format&fit=crop',
-      cafe_id: null,
-      is_active: 1,
+      tag_bg: 'rgba(123,79,0,0.2)',
+      image_url: 'https://images.unsplash.com/photo-1571877227200-a0d98ea607e9?q=80&w=800&auto=format&fit=crop',
       sort_order: 2,
     },
     {
       id: uuidv4(),
-      slider_type: 'EXPLORE',
+      name: 'Brew Bar',
+      slug: 'brew-bar',
+      description: 'Freshly brewed coffees, iced blends, and handcrafted café favorites for every mood.',
       tag: 'Classic',
       tag_color: '#7A1A00',
-      tag_bg: '#FFD6CC',
-      title: 'Brew Bar',
-      subtitle: 'Freshly brewed coffees, iced blends, and handcrafted café favorites for every mood.',
-      cta_text: 'Explore',
-      cta_bg: '#FFD6CC',
-      cta_text_color: '#7A1A00',
-      bg_color: '#2D1A15',
-      bg_image: 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?q=80&w=800&auto=format&fit=crop',
-      cafe_id: null,
-      is_active: 1,
+      tag_bg: 'rgba(122,26,0,0.2)',
+      image_url: 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?q=80&w=800&auto=format&fit=crop',
       sort_order: 3,
-    },
-    {
-      id: uuidv4(),
-      slider_type: 'EXPLORE',
-      tag: 'Earthy',
-      tag_color: '#2D6A4F',
-      tag_bg: '#D8F3DC',
-      title: 'Matcha Moments',
-      subtitle: 'Smooth, earthy matcha creations crafted for a refreshing and calming experience.',
-      cta_text: 'Explore',
-      cta_bg: '#D8F3DC',
-      cta_text_color: '#2D6A4F',
-      bg_color: '#1A3326',
-      bg_image: 'https://images.unsplash.com/photo-1582738411706-bfc8e691d1c2?q=80&w=800&auto=format&fit=crop',
-      cafe_id: null,
-      is_active: 1,
-      sort_order: 4,
     },
   ];
 
-  for (const b of exploreBannersData) {
-    await prisma.banner.create({ data: b });
+  await prisma.exploreCategory.deleteMany(); // Clear existing categories
+  for (const cat of exploreCategories) {
+    await prisma.exploreCategory.create({ data: cat });
   }
 
-  console.log('✅ Successfully seeded 4 Explore Catalog Banners!');
+  console.log('✅ Successfully seeded 3 Explore Categories!');
 }
 
 main()

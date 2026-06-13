@@ -6,15 +6,26 @@ const router = Router();
 // GET /api/v1/menu/items
 router.get('/items', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { cafeId } = req.query;
-    if (!cafeId) {
-      return res.status(400).json({ success: false, message: 'cafeId is required' });
+    const { cafeId, exploreCategory } = req.query;
+    if (!cafeId && !exploreCategory) {
+      return res.status(400).json({ success: false, message: 'cafeId or exploreCategory is required' });
+    }
+
+    const where: any = {};
+    if (cafeId) {
+      where.cafe_id = cafeId as string;
+    }
+    if (exploreCategory) {
+      where.explore_category = exploreCategory as string;
     }
 
     const items = await prisma.menuItem.findMany({
-      where: { cafe_id: cafeId as string },
+      where,
       include: {
         category: {
+          select: { name: true }
+        },
+        cafe: {
           select: { name: true }
         }
       },
@@ -31,6 +42,8 @@ router.get('/items', async (req: Request, res: Response, next: NextFunction) => 
       price: item.price * 100, // Convert to subunits (cents) for the Next.js web admin
       caffeine: item.caffeine,
       tags: item.tags ? (typeof item.tags === 'string' ? JSON.parse(item.tags) : item.tags) : [],
+      exploreCategory: item.explore_category || undefined,
+      cafeName: item.cafe?.name,
     }));
 
     return res.status(200).json({ success: true, data: formatted });

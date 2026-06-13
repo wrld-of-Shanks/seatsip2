@@ -123,8 +123,8 @@ const QUICK_FILTERS = [
 
 // Fallback static data (used when backend is unavailable)
 const FALLBACK_CAFES = [
-  { id: '1', name: 'Dyu Art Café', tag: 'Art', tags: ['Art'], moods: [] as string[], rating: 4.8, reviews: 521, distance: '2.4 km', eta: '15 min', image: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=400', discount: null as string | null, priceLevel: 2 },
-  { id: '2', name: 'Kapi Kafe', tag: 'South-Indian', tags: ['South-Indian'], moods: [] as string[], rating: 4.7, reviews: 631, distance: '2.8 km', eta: '20 min', image: 'https://images.unsplash.com/photo-1445116572660-236099ec97a0?w=400', discount: null as string | null, priceLevel: 1 },
+  { id: '1', name: 'Dyu Art Café', tag: 'Art', tags: ['Art'], moods: [] as string[], rating: 4.8, reviews: 521, distance: '2.4 km', eta: '15 min', image: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=400', discount: null as string | null, priceLevel: 2, priority: 0 },
+  { id: '2', name: 'Kapi Kafe', tag: 'South-Indian', tags: ['South-Indian'], moods: [] as string[], rating: 4.7, reviews: 631, distance: '2.8 km', eta: '20 min', image: 'https://images.unsplash.com/photo-1445116572660-236099ec97a0?w=400', discount: null as string | null, priceLevel: 1, priority: 0 },
 ];
 
 const CAFE_IMAGES = [
@@ -246,6 +246,7 @@ function mapCafeToCard(cafe: any, index: number) {
     image: images[0] || cafe.image_url || CAFE_IMAGES[index % CAFE_IMAGES.length],
     discount: cafe.discount || null,
     priceLevel: cafe.price_level ?? 2,
+    priority: cafe.priority || 0,
   };
 }
 
@@ -385,10 +386,18 @@ export default function CafeSpotHome() {
   const loadCafes = useCallback(async (isRefresh = false) => {
     try {
       if (!isRefresh) setLoading(true);
+      const hasLocation = selectedAddress && selectedAddress.latitude !== undefined && selectedAddress.longitude !== undefined;
+      const nearParams = hasLocation
+        ? { sort: 'distance', lat: selectedAddress.latitude, lng: selectedAddress.longitude, limit: 6 }
+        : { limit: 6 };
+      const popParams = hasLocation
+        ? { sort: 'distance', lat: selectedAddress.latitude, lng: selectedAddress.longitude, limit: 10 }
+        : { limit: 10 };
+
       const [nearRes, trendRes, popRes] = await Promise.all([
-        cafesApi.list({ limit: 6 }),
+        cafesApi.list(nearParams),
         cafesApi.list({ sort: 'trending', limit: 6 }),
-        cafesApi.getPopularItems(5).catch(() => ({ data: { success: false, data: [] } })),
+        cafesApi.getPopularItems(popParams).catch(() => ({ data: { success: false, data: [] } })),
       ]);
       const nearCafes = (nearRes.data.data || []).map(mapCafeToCard);
       const trendCafes = (trendRes.data.data || []).map(mapCafeToCard);
@@ -415,7 +424,7 @@ export default function CafeSpotHome() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [selectedAddress]);
 
   useEffect(() => {
     loadCafes();
@@ -495,6 +504,9 @@ export default function CafeSpotHome() {
         return true;
       })
       .sort((a, b) => {
+        if ((b.priority || 0) !== (a.priority || 0)) {
+          return (b.priority || 0) - (a.priority || 0);
+        }
         if (activeFilter === 'topRated') return b.rating - a.rating;
         if (activeFilter === 'offers') {
           const aHas = !!a.discount && a.discount.trim() !== '';
@@ -794,7 +806,7 @@ export default function CafeSpotHome() {
             <AppIcon name="→" size={12} color={BROWN} />
           </TouchableOpacity>
         </View>
-        {popularItems.map(item => (
+        {popularItems.slice(0, 3).map(item => (
           <PopularItem
             key={item.id}
             item={item}
@@ -809,6 +821,15 @@ export default function CafeSpotHome() {
             }}
           />
         ))}
+        {popularItems.length > 3 && (
+          <TouchableOpacity 
+            style={styles.viewMoreBtn}
+            onPress={() => navigation.navigate('PopularItems')}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.viewMoreBtnTxt}>View More Popular Items</Text>
+          </TouchableOpacity>
+        )}
 
         {/* New Food Promo Banner Slider */}
         <FoodPromoBannerSlider />
@@ -1127,6 +1148,22 @@ const styles = StyleSheet.create({
   popPrice: { fontSize: 14, fontWeight: '800', color: TEXT_DARK, textAlign: 'right' },
   addBtn: { backgroundColor: BROWN, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, marginTop: 4 },
   addBtnTxt: { fontSize: 11, color: '#fff', fontWeight: '700' },
+  viewMoreBtn: {
+    marginHorizontal: 16,
+    marginVertical: 8,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: BROWN,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(107, 63, 26, 0.05)',
+  },
+  viewMoreBtnTxt: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: BROWN,
+  },
   floatingCart: {
     position: 'absolute',
     left: 16,

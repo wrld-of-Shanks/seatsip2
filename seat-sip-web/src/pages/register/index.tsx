@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
-import { AlertCircle, ArrowLeft, CheckCircle2, Eye, EyeOff, FileText, Image as ImageIcon, Lock, Mail, MapPin, Phone, Store, User } from 'lucide-react';
+import { AlertCircle, ArrowLeft, CheckCircle2, Eye, EyeOff, FileText, Image as ImageIcon, Lock, Mail, MapPin, Phone, Store, User, X, QrCode, Laptop, Loader2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 type FormState = {
@@ -16,6 +16,8 @@ type FormState = {
   agreedToTerms: boolean;
   infoAccurate: boolean;
   understoodApproval: boolean;
+  latitude: number;
+  longitude: number;
 };
 
 const initialForm: FormState = {
@@ -31,6 +33,8 @@ const initialForm: FormState = {
   agreedToTerms: false,
   infoAccurate: false,
   understoodApproval: false,
+  latitude: 19.0760,
+  longitude: 72.8777,
 };
 
 export default function CafeOwnerRegisterPage() {
@@ -44,6 +48,179 @@ export default function CafeOwnerRegisterPage() {
   const [emailCheck, setEmailCheck] = useState('');
   const [error, setError] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [mapInstance, setMapInstance] = useState<any>(null);
+  const [markerInstance, setMarkerInstance] = useState<any>(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [isCoarseLocation, setIsCoarseLocation] = useState(false);
+  const [addressSearchQuery, setAddressSearchQuery] = useState('');
+  const [addressSearchResults, setAddressSearchResults] = useState<any[]>([]);
+  const [isSearchingAddress, setIsSearchingAddress] = useState(false);
+
+  const reverseGeocode = async (lat: number, lng: number) => {
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.display_name) {
+          setFormData(prev => ({ ...prev, cafeAddress: data.display_name }));
+        }
+      }
+    } catch (error) {
+      console.error('Reverse geocoding failed:', error);
+    }
+  };
+
+  const handleSelectAddressResult = (result: any) => {
+    const latitude = parseFloat(result.lat);
+    const longitude = parseFloat(result.lon);
+    setFormData(prev => ({
+      ...prev,
+      cafeAddress: result.display_name,
+      latitude,
+      longitude
+    }));
+
+    const L = (window as any).L;
+    if (mapInstance && markerInstance && L) {
+      mapInstance.setView([latitude, longitude], 15);
+      markerInstance.setLatLng([latitude, longitude]);
+    }
+
+    setAddressSearchResults([]);
+    setAddressSearchQuery('');
+    setIsCoarseLocation(false);
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const loadLeaflet = () => {
+      if (!document.getElementById('leaflet-css')) {
+        const link = document.createElement('link');
+        link.id = 'leaflet-css';
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        document.head.appendChild(link);
+      }
+
+      if (!document.getElementById('leaflet-js')) {
+        const script = document.createElement('script');
+        script.id = 'leaflet-js';
+        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+        script.onload = () => {
+          initMap();
+        };
+        document.head.appendChild(script);
+      } else if ((window as any).L) {
+        initMap();
+      }
+    };
+
+    const initMap = () => {
+      const L = (window as any).L;
+      if (!L) return;
+
+      const containerEl = document.getElementById('map-picker');
+      if (!containerEl) return;
+
+      const existingContainer = L.DomUtil.get('map-picker');
+      if (existingContainer) {
+        existingContainer._leaflet_id = null;
+      }
+
+      const startLat = formData.latitude || 19.0760;
+      const startLng = formData.longitude || 72.8777;
+
+      const m = L.map('map-picker').setView([startLat, startLng], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(m);
+
+      const mk = L.marker([startLat, startLng], { draggable: true }).addTo(m);
+
+      mk.on('dragend', () => {
+        const pos = mk.getLatLng();
+        setFormData(prev => ({ ...prev, latitude: pos.lat, longitude: pos.lng }));
+        setIsCoarseLocation(false);
+        reverseGeocode(pos.lat, pos.lng);
+      });
+
+      m.on('click', (e: any) => {
+        mk.setLatLng(e.latlng);
+        setFormData(prev => ({ ...prev, latitude: e.latlng.lat, longitude: e.latlng.lng }));
+        setIsCoarseLocation(false);
+        reverseGeocode(e.latlng.lat, e.latlng.lng);
+      });
+
+      setMapInstance(m);
+      setMarkerInstance(mk);
+    };
+
+    const timer = setTimeout(() => {
+      loadLeaflet();
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  const handleDetectLocation = () => {
+    if (typeof window === 'undefined') return;
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser.');
+      return;
+    }
+
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+        setFormData(prev => ({ ...prev, latitude, longitude }));
+        
+        const isCoarse = accuracy > 1000;
+        const L = (window as any).L;
+        if (mapInstance && markerInstance && L) {
+          mapInstance.setView([latitude, longitude], isCoarse ? 12 : 16);
+          markerInstance.setLatLng([latitude, longitude]);
+        }
+        setIsCoarseLocation(isCoarse);
+        setIsLocating(false);
+        reverseGeocode(latitude, longitude);
+      },
+      (error) => {
+        setIsLocating(false);
+        if (error.code === error.PERMISSION_DENIED) {
+          alert('Location permission denied. Please allow location access in your browser settings to detect your live location, or drag the marker manually.');
+        } else {
+          alert('Could not retrieve your live location. Please ensure location services are enabled on your device, or drag the marker manually.');
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
+
+  const handleSearchAddress = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const query = addressSearchQuery.trim() || formData.cafeAddress.trim();
+    if (!query) {
+      alert('Please enter an address in the search box or the Cafe Address input first.');
+      return;
+    }
+
+    setIsSearchingAddress(true);
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`);
+      const data = await response.json();
+      setAddressSearchResults(data || []);
+      if (!data || data.length === 0) {
+        alert('No locations found matching that query. Please refine your search.');
+      }
+    } catch (error) {
+      console.error('Geocoding search failed:', error);
+      alert('Error searching for address. Please search manually.');
+    } finally {
+      setIsSearchingAddress(false);
+    }
+  };
 
   const canSubmit = useMemo(() => {
     return Boolean(
@@ -117,6 +294,8 @@ export default function CafeOwnerRegisterPage() {
         termsAccepted: formData.agreedToTerms,
         informationAccurate: formData.infoAccurate,
         approvalRequired: formData.understoodApproval,
+        latitude: formData.latitude,
+        longitude: formData.longitude,
       };
 
       const response = await fetch('/api/auth/cafe-owner/register', {
@@ -155,7 +334,7 @@ export default function CafeOwnerRegisterPage() {
             </p>
             <button
               onClick={() => router.push('/login')}
-              className="mt-7 inline-flex items-center justify-center gap-2 rounded-lg bg-white px-5 py-3 text-sm font-black text-stone-900 transition hover:bg-amber-100"
+              className="mt-7 inline-flex items-center justify-center gap-2 rounded-lg bg-white px-5 py-3 text-sm font-black text-stone-950 transition hover:bg-amber-100"
             >
               Back to Login
             </button>
@@ -178,7 +357,7 @@ export default function CafeOwnerRegisterPage() {
           <ArrowLeft size={16} />
           Login
         </button>
-
+        
         <form onSubmit={handleSubmit} className="glass-panel rounded-2xl p-6 shadow-2xl sm:p-8">
           <div className="mb-8">
             <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-white/30 bg-white/20 text-amber-100">
@@ -213,6 +392,102 @@ export default function CafeOwnerRegisterPage() {
               <h2 className="text-xs font-black uppercase tracking-widest text-amber-200">Cafe Information</h2>
               <Field icon={Store} label="Cafe Name" value={formData.cafeName} onChange={value => updateField('cafeName', value)} required />
               <Field icon={MapPin} label="Cafe Address" value={formData.cafeAddress} onChange={value => updateField('cafeAddress', value)} required />
+                            {/* Map location picker & Detect Live Location */}
+              <div className="space-y-4 p-4 rounded-xl border border-white/10 bg-white/5">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="text-xs font-black uppercase tracking-wider text-amber-200">Cafe Map Location</span>
+                  <button
+                    type="button"
+                    disabled={isLocating}
+                    onClick={handleDetectLocation}
+                    className="px-3 py-1.5 rounded-lg border border-amber-200/30 bg-amber-50/50 text-xs font-bold text-amber-200 hover:bg-amber-500/20 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-60"
+                  >
+                    {isLocating ? (
+                      <>
+                        <Loader2 size={12} className="animate-spin text-amber-200" />
+                        Locating...
+                      </>
+                    ) : (
+                      <>
+                        <MapPin size={12} />
+                        Detect Live Location
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Search Address Box */}
+                <div className="space-y-2">
+                  <label className="block text-[10px] font-black text-amber-200/70 uppercase tracking-widest">Search City / Town / Address</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={addressSearchQuery}
+                      onChange={(e) => setAddressSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleSearchAddress();
+                        }
+                      }}
+                      placeholder="Search e.g. Hubli, Mumbai"
+                      className="flex-1 px-4 py-3 border border-white/20 bg-white/10 text-white rounded-lg text-xs font-semibold focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all placeholder:text-white/40"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleSearchAddress()}
+                      disabled={isSearchingAddress}
+                      className="px-4 py-3 bg-[#74554b] border border-white/10 text-white rounded-lg text-xs font-black hover:bg-[#836359] transition-all disabled:opacity-50"
+                    >
+                      {isSearchingAddress ? 'Searching...' : 'Search'}
+                    </button>
+                  </div>
+
+                  {/* Suggestions List Dropdown */}
+                  {addressSearchResults.length > 0 && (
+                    <ul className="max-h-40 overflow-y-auto border border-white/20 bg-[#1e1b19]/95 backdrop-blur-xl rounded-xl divide-y divide-white/10 shadow-2xl z-20 relative">
+                      {addressSearchResults.map((result, idx) => (
+                        <li key={idx}>
+                          <button
+                            type="button"
+                            onClick={() => handleSelectAddressResult(result)}
+                            className="w-full text-left px-4 py-2.5 hover:bg-white/10 text-white/90 text-xs font-medium transition-all"
+                          >
+                            {result.display_name}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                
+                <div id="map-picker" className="h-56 w-full rounded-lg border border-white/10 bg-white/5 overflow-hidden z-10" />
+
+                {isCoarseLocation && (
+                  <div className="flex gap-2.5 items-start p-3.5 rounded-xl border border-amber-500/25 bg-amber-500/10 text-amber-200 mt-2 text-xs animate-pulse">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+                    <div className="text-left font-semibold">
+                      <span className="font-bold text-amber-300 block mb-0.5">Approximate Location</span>
+                      Your device returned a coarse position. Please type your city/town in the search box above or drag the pin to your exact cafe location.
+                    </div>
+                  </div>
+                )}
+                
+                <div className="grid grid-cols-2 gap-4 text-xs font-bold text-white/55">
+                  <div className="p-2.5 bg-white/5 rounded-lg border border-white/5">
+                    <span className="block text-[9px] uppercase tracking-wider text-white/35">Latitude</span>
+                    <span className="text-white/80 font-mono text-sm">{formData.latitude.toFixed(6)}</span>
+                  </div>
+                  <div className="p-2.5 bg-white/5 rounded-lg border border-white/5">
+                    <span className="block text-[9px] uppercase tracking-wider text-white/35">Longitude</span>
+                    <span className="text-white/80 font-mono text-sm">{formData.longitude.toFixed(6)}</span>
+                  </div>
+                </div>
+                <p className="text-[10px] text-white/40 leading-normal">
+                  Click on the map or drag the marker to pinpoint the exact location of your cafe. The address field will automatically update to reflect the pinned location.
+                </p>
+              </div>
+
               <TextArea label="Description" value={formData.description} onChange={value => updateField('description', value.slice(0, 500))} required />
               <Field icon={Phone} label="Opening Hours" value={formData.openingHours} onChange={value => updateField('openingHours', value)} placeholder="9:00 AM - 10:00 PM" required />
               <FileField icon={ImageIcon} label="Cafe Photos" accept="image/*" multiple onChange={handleCafePhotos} required />
@@ -250,6 +525,8 @@ export default function CafeOwnerRegisterPage() {
           </button>
         </form>
       </section>
+
+
     </main>
   );
 }

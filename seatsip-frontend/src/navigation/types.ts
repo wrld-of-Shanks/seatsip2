@@ -47,6 +47,7 @@ export type RootStackParamList = {
   AllRewards: undefined;
   ChangePassword: undefined;
   LanguageSelect: undefined;
+  ExploreItems: { categorySlug: string; categoryName: string };
 };
 
 export type TabParamList = {

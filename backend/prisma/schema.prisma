@@ -94,6 +94,7 @@ model Cafe {
   delivery_fee      Float          @default(0)
   min_order         Float          @default(0)
   is_active         Int            @default(1)
+  priority          Int            @default(0)
   upi_id            String?
   state             String?
   pincode           String?
@@ -167,6 +168,7 @@ model MenuItem {
   allergens         String        @default("[]")
   customizations    String        @default("[]")
   tags              String        @default("[]")
+  explore_category  String?
   created_at        DateTime      @default(now())
   updated_at        DateTime      @updatedAt
   cart_items        CartItem[]
@@ -420,6 +422,7 @@ model Banner {
   bg_image          String
   cafe_id           String?
   cafe              Cafe?    @relation(fields: [cafe_id], references: [id], onDelete: SetNull)
+  explore_category  String?
   is_active         Int      @default(1)
   sort_order        Int      @default(0)
   created_at        DateTime @default(now())
@@ -447,4 +450,20 @@ model FeatureFlag {
   description String?
 
   @@map("feature_flags")
+}
+
+model ExploreCategory {
+  id          String   @id
+  name        String   @unique
+  slug        String   @unique
+  description String?
+  tag         String?
+  tag_color   String   @default("#FFFFFF")
+  tag_bg      String   @default("rgba(45,106,79,0.2)")
+  image_url   String?
+  sort_order  Int      @default(0)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@map("explore_categories")
 }

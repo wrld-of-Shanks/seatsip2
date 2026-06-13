@@ -29,8 +29,107 @@ import {
   useBrowserRefreshCookie,
 } from '../common/refreshCookie';
 import { generateAndSendOtp, verifyOtp } from '../services/otpService';
+import os from 'os';
 
 const router = Router();
+
+// In-memory sessions store mapping ID to coordinates and timestamp
+const mobileLocationSessions = new Map<string, { latitude: number | null; longitude: number | null; createdAt: number }>();
+
+// Clean up expired sessions every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, session] of mobileLocationSessions.entries()) {
+    if (now - session.createdAt > 5 * 60 * 1000) {
+      mobileLocationSessions.delete(id);
+    }
+  }
+}, 5 * 60 * 1000);
+
+function getLocalIpAddress(): string {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    const iface = interfaces[name];
+    if (iface) {
+      for (const entry of iface) {
+        if (entry.family === 'IPv4' && !entry.internal) {
+          return entry.address;
+        }
+      }
+    }
+  }
+  return '127.0.0.1';
+}
+
+const submitLocationSchema = z.object({
+  latitude: z.number(),
+  longitude: z.number(),
+  source: z.string().optional(),
+});
+
+// Initialize a sync session and return session ID & server's LAN IP
+router.post('/mobile-location/session', async (req, res) => {
+  try {
+    const sessionId = uuidv4();
+    mobileLocationSessions.set(sessionId, {
+      latitude: null,
+      longitude: null,
+      source: null,
+      createdAt: Date.now(),
+    } as any);
+    const ip = getLocalIpAddress();
+    return res.status(201).json({
+      success: true,
+      sessionId,
+      ip,
+    });
+  } catch (err: unknown) {
+    secureLogger.error('failed to initialize mobile sync session', err);
+    return res.status(500).json({ success: false, message: 'Failed to start sync session' });
+  }
+});
+
+// Get coordinates for desktop polling
+router.get('/mobile-location/session/:id', async (req, res) => {
+  const { id } = req.params;
+  const session = mobileLocationSessions.get(id);
+  if (!session) {
+    return res.status(404).json({ success: false, message: 'Session not found or expired' });
+  }
+  return res.json({
+    success: true,
+    latitude: session.latitude,
+    longitude: session.longitude,
+    source: (session as any).source || null,
+  });
+});
+
+// Submit location coordinates from phone browser
+router.post(
+  '/mobile-location/session/:id/submit',
+  validate({ body: submitLocationSchema }),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const session = mobileLocationSessions.get(id);
+      if (!session) {
+        return res.status(404).json({ success: false, message: 'Session not found or expired' });
+      }
+      const { latitude, longitude, source } = req.body as z.infer<typeof submitLocationSchema>;
+      session.latitude = latitude;
+      session.longitude = longitude;
+      (session as any).source = source || null;
+      mobileLocationSessions.set(id, session);
+      return res.json({
+        success: true,
+        message: 'Location synchronized successfully',
+      });
+    } catch (err: unknown) {
+      secureLogger.error('failed to submit mobile coordinates', err);
+      return res.status(500).json({ success: false, message: 'Failed to save location' });
+    }
+  }
+);
 
 const registerSchema = z.object({
   name: z.string().min(2, { message: 'Name must be at least 2 characters' }).max(100),
@@ -91,6 +190,8 @@ const cafeOwnerApplicationSchema = z.object({
   termsAccepted: z.literal(true),
   informationAccurate: z.literal(true),
   approvalRequired: z.literal(true),
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
 });
 
 /** Public user shape + `token` / `_id` for clients expecting a Mongo-style JWT payload. */
@@ -131,6 +232,33 @@ function userPublicFields(u: {
     created_at: u.created_at,
   };
 }
+
+const checkEmailQuerySchema = z.object({
+  email: z
+    .string()
+    .email({ message: 'Enter a valid email address' })
+    .max(254)
+    .transform((email) => email.toLowerCase()),
+});
+
+router.get(
+  '/check-email',
+  authRegisterLimiter,
+  validate({ query: checkEmailQuerySchema }),
+  async (req, res) => {
+    try {
+      const { email } = req.query as unknown as z.infer<typeof checkEmailQuerySchema>;
+      const user = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+      return res.json({ available: !user });
+    } catch (err: unknown) {
+      secureLogger.error('check email availability failed', err);
+      return res.status(500).json({ success: false, message: 'Failed to check email availability' });
+    }
+  }
+);
 
 router.post('/register', authRegisterLimiter, validate({ body: registerSchema }), audit('REGISTER', 'auth'), async (req, res) => {
   try {
@@ -251,6 +379,8 @@ router.post(
             description: body.description || null,
             address: body.cafeAddress,
             city: 'Mumbai',
+            latitude: body.latitude !== undefined ? body.latitude : 19.0760,
+            longitude: body.longitude !== undefined ? body.longitude : 72.8777,
             phone: body.phone,
             email: body.email,
             owner_id: ownerId,

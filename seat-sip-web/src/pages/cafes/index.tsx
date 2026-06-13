@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Layout from '@/components/layout/Layout';
 import { api } from '@/services/api';
-import { Plus, Edit, Trash2, MapPin, Star, Table as TableIcon, Search, Filter, Building2, Phone, Clock, Image as ImageIcon, User, ChevronDown } from 'lucide-react';
+import { Plus, Edit, Trash2, MapPin, Star, Table as TableIcon, Search, Filter, Building2, Phone, Clock, Image as ImageIcon, User, ChevronDown, X, QrCode, Laptop, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Sidebar } from '@/components/ui/Sidebar';
 
 export default function CafesPage() {
@@ -48,7 +48,201 @@ export default function CafesPage() {
     coverColor: '',
     discount: '',
     reservationSlots: '09:00, 11:00, 13:00, 15:00, 17:00, 19:00',
+    priority: 0,
   });
+
+  const [addressSearchQuery, setAddressSearchQuery] = useState('');
+  const [addressSearchResults, setAddressSearchResults] = useState<any[]>([]);
+  const [isSearchingAddress, setIsSearchingAddress] = useState(false);
+
+  const handleSearchAddress = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const query = addressSearchQuery.trim() || formData.address.trim();
+    if (!query) {
+      alert('Please enter an address in the search box or the Location Details input first.');
+      return;
+    }
+    setIsSearchingAddress(true);
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`);
+      const data = await res.json();
+      setAddressSearchResults(data || []);
+      if (!data || data.length === 0) {
+        alert('No locations found matching that query. Please refine your search.');
+      }
+    } catch (error) {
+      console.error('Geocoding search failed:', error);
+    } finally {
+      setIsSearchingAddress(false);
+    }
+  };
+
+  const handleSelectAddressResult = (result: any) => {
+    setFormData(prev => ({
+      ...prev,
+      address: result.display_name,
+      lat: parseFloat(result.lat),
+      lng: parseFloat(result.lon)
+    }));
+    setAddressSearchResults([]);
+    setAddressSearchQuery('');
+    setIsCoarseLocation(false);
+  };
+
+  const [mapInstance, setMapInstance] = useState<any>(null);
+  const [markerInstance, setMarkerInstance] = useState<any>(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [isCoarseLocation, setIsCoarseLocation] = useState(false);
+
+  useEffect(() => {
+    let m: any = null;
+    let mk: any = null;
+
+    if (typeof window === 'undefined') return;
+
+    const loadMaplibre = () => {
+      if (!document.getElementById('maplibre-css')) {
+        const link = document.createElement('link');
+        link.id = 'maplibre-css';
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/maplibre-gl@4.7.0/dist/maplibre-gl.css';
+        document.head.appendChild(link);
+      }
+
+      if (!document.getElementById('maplibre-js')) {
+        const script = document.createElement('script');
+        script.id = 'maplibre-js';
+        script.src = 'https://unpkg.com/maplibre-gl@4.7.0/dist/maplibre-gl.js';
+        script.onload = () => {
+          initMap();
+        };
+        document.head.appendChild(script);
+      } else if ((window as any).maplibregl) {
+        initMap();
+      }
+    };
+
+    const initMap = () => {
+      const maplibregl = (window as any).maplibregl;
+      if (!maplibregl) return;
+
+      const containerEl = document.getElementById('admin-map-picker');
+      if (!containerEl) return;
+
+      const startLat = parseFloat(formData.lat as any) || 19.0760;
+      const startLng = parseFloat(formData.lng as any) || 72.8777;
+
+      try {
+        m = new maplibregl.Map({
+          container: 'admin-map-picker',
+          style: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
+          center: [startLng, startLat],
+          zoom: 13,
+          attributionControl: false
+        });
+
+        mk = new maplibregl.Marker({
+          draggable: true,
+          color: '#E63946'
+        })
+        .setLngLat([startLng, startLat])
+        .addTo(m);
+
+        mk.on('dragend', () => {
+          const pos = mk.getLngLat();
+          setFormData(prev => ({ ...prev, lat: pos.lat, lng: pos.lng }));
+          setIsCoarseLocation(false);
+          reverseGeocode(pos.lat, pos.lng);
+        });
+
+        m.on('click', (e: any) => {
+          mk.setLngLat(e.lngLat);
+          setFormData(prev => ({ ...prev, lat: e.lngLat.lat, lng: e.lngLat.lng }));
+          setIsCoarseLocation(false);
+          reverseGeocode(e.lngLat.lat, e.lngLat.lng);
+        });
+
+        setMapInstance(m);
+        setMarkerInstance(mk);
+      } catch (err) {
+        console.error('Failed to initialize Maplibre map:', err);
+      }
+    };
+
+    if (showAddSidebar) {
+      const timer = setTimeout(() => {
+        loadMaplibre();
+      }, 500);
+      return () => {
+        clearTimeout(timer);
+        if (m) {
+          m.remove();
+        }
+      };
+    }
+  }, [showAddSidebar]);
+
+  useEffect(() => {
+    if (mapInstance && markerInstance) {
+      const currentPos = markerInstance.getLngLat();
+      const targetLat = parseFloat(formData.lat as any) || 19.0760;
+      const targetLng = parseFloat(formData.lng as any) || 72.8777;
+      
+      if (Math.abs(currentPos.lat - targetLat) > 0.0001 || Math.abs(currentPos.lng - targetLng) > 0.0001) {
+        markerInstance.setLngLat([targetLng, targetLat]);
+        mapInstance.setCenter([targetLng, targetLat]);
+      }
+    }
+  }, [formData.lat, formData.lng, mapInstance, markerInstance]);
+
+  const reverseGeocode = async (lat: number, lng: number) => {
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.display_name) {
+          setFormData(prev => ({ ...prev, address: data.display_name }));
+        }
+      }
+    } catch (error) {
+      console.error('Reverse geocoding failed:', error);
+    }
+  };
+
+  const handleDetectLocation = () => {
+    if (typeof window === 'undefined') return;
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser.');
+      return;
+    }
+
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+        setFormData(prev => ({ ...prev, lat: latitude, lng: longitude }));
+        
+        const isCoarse = accuracy > 1000;
+        if (mapInstance && markerInstance) {
+          markerInstance.setLngLat([longitude, latitude]);
+          mapInstance.setCenter([longitude, latitude]);
+          mapInstance.setZoom(isCoarse ? 12 : 16);
+        }
+        setIsCoarseLocation(isCoarse);
+        setIsLocating(false);
+        reverseGeocode(latitude, longitude);
+      },
+      (error) => {
+        setIsLocating(false);
+        if (error.code === error.PERMISSION_DENIED) {
+          alert('Location permission denied. Please allow location access in your browser settings to detect your live location, or drag the marker manually.');
+        } else {
+          alert('Could not retrieve your live location. Please ensure location services are enabled on your device, or drag the marker manually.');
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
 
   useEffect(() => {
     const role = document.cookie.split('; ').find(row => row.startsWith('admin_role='))?.split('=')[1];
@@ -112,6 +306,7 @@ export default function CafesPage() {
       coverColor: '',
       discount: '',
       reservationSlots: '09:00, 11:00, 13:00, 15:00, 17:00, 19:00',
+      priority: 0,
     });
     setEditingCafe(null);
   };
@@ -161,6 +356,7 @@ export default function CafesPage() {
       coverColor: cafe.coverColor || cafe.cover_color || '',
       discount: cafe.discount || '',
       reservationSlots: safeParseStringList(cafe.reservation_slots || cafe.reservationSlots, ', '),
+      priority: cafe.priority || 0,
     });
     setShowAddSidebar(true);
   };
@@ -281,7 +477,7 @@ export default function CafesPage() {
                         <img src={cafe.imageUrl} alt={cafe.name} className="w-full h-full object-cover" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-stone-300">
-                          <Building2 size={24} />
+                           <Building2 size={24} />
                         </div>
                       )}
                     </div>
@@ -306,6 +502,9 @@ export default function CafesPage() {
                       <span className="text-xs font-black text-amber-700">{cafe.rating || '4.5'}</span>
                     </div>
                     <span className="text-[10px] font-bold text-stone-400 uppercase tracking-tighter">({cafe.reviewCount || 0} reviews)</span>
+                    {userRole === 'ADMIN' && cafe.priority !== undefined && (
+                      <span className="ml-2 text-[10px] bg-purple-50 text-purple-700 px-2 py-0.5 rounded font-black border border-purple-100/50">Priority: {cafe.priority}</span>
+                    )}
                   </div>
                 </td>
                 <td className="px-8 py-5 text-center">
@@ -400,6 +599,20 @@ export default function CafesPage() {
               </div>
             )}
 
+            {userRole === 'ADMIN' && (
+              <div className="group">
+                <label className="block text-[10px] font-black text-stone-400 uppercase tracking-[0.2em] mb-3 group-focus-within:text-stone-900 transition-colors">Cafe Sorting Priority</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={formData.priority || 0}
+                  onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) || 0 })}
+                  className="w-full px-6 py-4 bg-stone-50 border border-stone-100 rounded-[1.5rem] focus:ring-4 focus:ring-stone-900/5 focus:bg-white focus:border-stone-900 outline-none transition-all font-bold text-stone-900"
+                  placeholder="0 (Default) to 100+ (Highest priority)"
+                />
+              </div>
+            )}
+
             {!isCafeOwner && (
             <div className="group">
               <label className="block text-[10px] font-black text-stone-400 uppercase tracking-[0.2em] mb-3 group-focus-within:text-stone-900 transition-colors">Location Details</label>
@@ -416,6 +629,112 @@ export default function CafesPage() {
               </div>
             </div>
             )}
+
+            {/* Address Search & Geolocation Map Picker */}
+            <div className="space-y-4 p-5 bg-stone-50 border border-stone-100 rounded-[1.5rem]">
+              <div className="group">
+                <label className="block text-[10px] font-black text-stone-400 uppercase tracking-[0.2em] mb-2">Search Location / Address</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={addressSearchQuery}
+                    onChange={(e) => setAddressSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSearchAddress();
+                      }
+                    }}
+                    placeholder="Type address, e.g. Hubli, India"
+                    className="flex-1 px-4 py-3 bg-white border border-stone-200 rounded-xl text-stone-800 text-xs font-bold focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleSearchAddress()}
+                    disabled={isSearchingAddress}
+                    className="px-4 py-3 bg-stone-900 text-white rounded-xl text-xs font-black hover:bg-stone-800 transition-all disabled:opacity-50"
+                  >
+                    {isSearchingAddress ? 'Searching...' : 'Search'}
+                  </button>
+                </div>
+
+                {/* Suggestions List */}
+                {addressSearchResults.length > 0 && (
+                  <ul className="mt-2 max-h-40 overflow-y-auto border border-stone-200 bg-white rounded-xl divide-y divide-stone-100 shadow-lg">
+                    {addressSearchResults.map((result, idx) => (
+                      <li key={idx}>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectAddressResult(result)}
+                          className="w-full text-left px-4 py-2.5 hover:bg-stone-50 text-stone-700 text-xs font-medium transition-all"
+                        >
+                          {result.display_name}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
+                <label className="block text-[10px] font-black text-stone-400 uppercase tracking-[0.2em]">Map Coordinates</label>
+                <button
+                  type="button"
+                  disabled={isLocating}
+                  onClick={handleDetectLocation}
+                  className="px-2.5 py-1.5 rounded-xl border border-stone-200 bg-white text-[10px] font-black text-stone-600 hover:bg-stone-50 active:scale-95 transition-all flex items-center gap-1 disabled:opacity-60"
+                >
+                  {isLocating ? (
+                    <>
+                      <Loader2 size={10} className="animate-spin text-stone-900" />
+                      Locating...
+                    </>
+                  ) : (
+                    <>
+                      <MapPin size={10} />
+                      Detect Live Location
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <div id="admin-map-picker" className="h-52 w-full rounded-xl border border-stone-100 bg-stone-100/50 overflow-hidden z-10" />
+
+              {isCoarseLocation && (
+                <div className="flex gap-2.5 items-start p-3.5 rounded-xl border border-amber-250 bg-amber-50/50 text-amber-800 mt-2 text-xs animate-pulse">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 font-bold" />
+                  <div className="text-left font-semibold">
+                    <span className="font-bold text-amber-700 block mb-0.5">Approximate Location</span>
+                    Your device returned a coarse position. Please type your address in the search box above or drag the pin to your exact cafe location.
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-4 text-xs font-bold text-stone-500">
+                <div className="group">
+                  <label className="block text-[10px] font-black text-stone-400 uppercase tracking-[0.2em] mb-2">Latitude</label>
+                  <input
+                    type="number"
+                    step="any"
+                    required
+                    value={formData.lat}
+                    onChange={(e) => setFormData({ ...formData, lat: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-4 py-3 bg-white border border-stone-200 rounded-xl text-stone-800 font-mono focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all"
+                  />
+                </div>
+                <div className="group">
+                  <label className="block text-[10px] font-black text-stone-400 uppercase tracking-[0.2em] mb-2">Longitude</label>
+                  <input
+                    type="number"
+                    step="any"
+                    required
+                    value={formData.lng}
+                    onChange={(e) => setFormData({ ...formData, lng: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-4 py-3 bg-white border border-stone-200 rounded-xl text-stone-800 font-mono focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all"
+                  />
+                </div>
+              </div>
+            </div>
 
             <div className="grid grid-cols-2 gap-6">
               <div className="group">
@@ -723,6 +1042,7 @@ export default function CafesPage() {
           </div>
         </div>
       )}
+
     </Layout>
   );
 }

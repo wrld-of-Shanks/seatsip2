@@ -124,6 +124,7 @@ export const api = {
   },
   cafeOwners: {
     list: () => fetchApi('/admin/cafe-owners'),
+    listPending: () => fetchApi('/admin/cafe-owners/pending'),
     registerApplication: (data: any) => fetchApi('/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -195,5 +196,20 @@ export const api = {
       const query = new URLSearchParams(params).toString();
       return fetchApi(`/admin/rewards/redemptions?${query}`);
     },
+  },
+  exploreCategories: {
+    listPublic: () => fetchApi('/explore-categories'),
+    list: () => fetchApi('/admin/explore-categories'),
+    create: (data: any) => fetchApi('/admin/explore-categories', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+    update: (id: string, data: any) => fetchApi(`/admin/explore-categories/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+    delete: (id: string) => fetchApi(`/admin/explore-categories/${id}`, {
+      method: 'DELETE',
+    }),
   },
 };

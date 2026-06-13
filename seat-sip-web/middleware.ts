@@ -51,6 +51,7 @@ export function middleware(req: NextRequest) {
       '/permissions',
       '/audit-logs',
       '/staff',
+      '/explore',
     ];
 
     if (blockedOwnerPaths.some(path => pathname === path || pathname.startsWith(`${path}/`))) {

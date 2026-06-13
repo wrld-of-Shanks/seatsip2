@@ -155,7 +155,7 @@ export default function CafeOwnersPage() {
   async function loadOwners() {
     try {
       setLoading(true);
-      const res = await api.cafeOwners.list();
+      const res = await api.cafeOwners.listPending();
       if (res.success) {
         setOwners(res.data);
       }

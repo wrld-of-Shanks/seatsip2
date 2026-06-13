@@ -16,7 +16,8 @@ import {
   IndianRupee,
   Building2,
   ChevronDown,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Compass
 } from 'lucide-react';
 import { Sidebar } from '@/components/ui/Sidebar';
 
@@ -81,6 +82,7 @@ export default function MenuPage() {
   const [showAddSidebar, setShowAddSidebar] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [exploreCategories, setExploreCategories] = useState<any[]>([]);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -97,12 +99,14 @@ export default function MenuPage() {
     stockQuantity: '999',
     tags: '',
     caffeine: '',
+    exploreCategory: '',
   });
 
   useEffect(() => {
     const role = document.cookie.split('; ').find(row => row.startsWith('admin_role='))?.split('=')[1];
     setUserRole(role || null);
     loadCafes();
+    loadExploreCategories();
   }, []);
 
   useEffect(() => {
@@ -126,6 +130,17 @@ export default function MenuPage() {
     } catch (error) {
       console.error('Failed to load cafes:', error);
       setLoading(false);
+    }
+  }
+
+  async function loadExploreCategories() {
+    try {
+      const res = await api.exploreCategories.list();
+      if (res.success) {
+        setExploreCategories(res.data);
+      }
+    } catch (error) {
+      console.error('Failed to load explore categories:', error);
     }
   }
 
@@ -158,6 +173,7 @@ export default function MenuPage() {
       stockQuantity: '999',
       tags: '',
       caffeine: '',
+      exploreCategory: '',
     });
     setEditingItem(null);
   };
@@ -193,6 +209,7 @@ export default function MenuPage() {
       stockQuantity: String(item.stockQuantity !== undefined ? item.stockQuantity : (item.stock_quantity !== undefined ? item.stock_quantity : 999)),
       tags: safeParseStringList(item.tags, ', '),
       caffeine: String(item.caffeine || ''),
+      exploreCategory: item.exploreCategory || item.explore_category || '',
     });
     setShowAddSidebar(true);
   };
@@ -211,6 +228,10 @@ export default function MenuPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.exploreCategory) {
+      alert('Explore Category is required.');
+      return;
+    }
     setIsSubmitting(true);
     try {
       const payload = {
@@ -402,6 +423,25 @@ export default function MenuPage() {
                     placeholder="0.00"
                   />
                 </div>
+              </div>
+            </div>
+
+            <div className="group">
+              <label className="block text-[10px] font-black text-stone-400 uppercase tracking-[0.2em] mb-3 group-focus-within:text-stone-900 transition-colors">Explore Category (Compulsory)</label>
+              <div className="relative">
+                <Compass className="absolute left-5 top-5 text-stone-300 group-focus-within:text-stone-900" size={18} />
+                <select
+                  required
+                  value={formData.exploreCategory}
+                  onChange={(e) => setFormData({ ...formData, exploreCategory: e.target.value })}
+                  className="w-full pl-14 pr-12 py-4 bg-stone-50 border border-stone-100 rounded-[1.5rem] focus:ring-4 focus:ring-stone-900/5 focus:bg-white focus:border-stone-900 outline-none transition-all font-bold text-stone-800 appearance-none cursor-pointer"
+                >
+                  <option value="">Select Explore Category</option>
+                  {exploreCategories.map(cat => (
+                    <option key={cat.id} value={cat.slug}>{cat.name}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-5 top-5 text-stone-300 pointer-events-none" size={18} />
               </div>
             </div>
 

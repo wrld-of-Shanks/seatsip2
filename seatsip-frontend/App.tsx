@@ -49,6 +49,7 @@ import PlaceholderScreen from './src/screens/PlaceholderScreen';
 import PreOrderMenuScreen from './src/screens/reservations/PreOrderMenuScreen';
 import CafeListScreen from './src/screens/home/CafeListScreen';
 import PopularItemsScreen from './src/screens/home/PopularItemsScreen';
+import ExploreItemsScreen from './src/screens/explore/ExploreItemsScreen';
 import AllRewardsScreen from './src/screens/rewards/AllRewardsScreen';
 import ChangePasswordScreen from './src/screens/profile/ChangePasswordScreen';
 import LanguageSelectScreen from './src/screens/profile/LanguageSelectScreen';
@@ -227,6 +228,7 @@ function Navigation() {
       )}
       <Stack.Screen name="CafeList" component={CafeListScreen} />
       <Stack.Screen name="PopularItems" component={PopularItemsScreen} />
+      <Stack.Screen name="ExploreItems" component={ExploreItemsScreen} />
       <Stack.Screen name="AllRewards" component={AllRewardsScreen} />
     </Stack.Navigator>
   );
