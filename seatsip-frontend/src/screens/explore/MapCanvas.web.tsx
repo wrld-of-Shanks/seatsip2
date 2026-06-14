@@ -1,7 +1,12 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
-import maplibregl, { Map as MapLibreMap, Marker } from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
+import type { Map as MapLibreMap } from 'maplibre-gl';
+
+let _maplibregl: any;
+async function getMaplibregl() {
+  if (!_maplibregl) _maplibregl = await import('maplibre-gl');
+  return _maplibregl;
+}
 
 const MAPTILER_KEY = '5qJr4cBxnkaZ1S4BU1Ua';
 const MAP_STYLE = `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`;
@@ -425,39 +430,46 @@ const MapCanvas = forwardRef<MapCanvasHandle, Props>(({ restaurants, city, selec
     const container = containerRef.current;
     if (!container || mapRef.current) return;
 
-    container.style.width = '100%';
-    container.style.height = '100%';
-    container.style.position = 'absolute';
-    container.style.inset = '0';
+    let cleanupFns: (() => void)[] = [];
+    const addCleanup = (fn: () => void) => { cleanupFns.push(fn); };
 
-    const controlStyle = document.createElement('style');
-    controlStyle.textContent = `
-      .maplibregl-ctrl-top-right {
-        top: 134px;
-        right: 12px;
-      }
-      .maplibregl-ctrl-bottom-right {
-        bottom: 228px;
-        right: 12px;
-      }
-      .maplibregl-ctrl button {
-        width: 34px;
-        height: 34px;
-      }
-    `;
-    document.head.appendChild(controlStyle);
+    (async () => {
+      const ml = await getMaplibregl();
 
-    const map = new maplibregl.Map({
-      container,
-      style: MAP_STYLE,
-      center: [city.lng, city.lat],
-      zoom: Math.max(DEFAULT_ZOOM, city.zoom_level || DEFAULT_ZOOM),
-      pitch: 60,
-      bearing: -20,
-      attributionControl: false,
-    });
+      container.style.width = '100%';
+      container.style.height = '100%';
+      container.style.position = 'absolute';
+      container.style.inset = '0';
 
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+      const controlStyle = document.createElement('style');
+      controlStyle.textContent = `
+        .maplibregl-ctrl-top-right {
+          top: 134px;
+          right: 12px;
+        }
+        .maplibregl-ctrl-bottom-right {
+          bottom: 228px;
+          right: 12px;
+        }
+        .maplibregl-ctrl button {
+          width: 34px;
+          height: 34px;
+        }
+      `;
+      document.head.appendChild(controlStyle);
+      addCleanup(() => controlStyle.remove());
+
+      const map = new ml.Map({
+        container,
+        style: MAP_STYLE,
+        center: [city.lng, city.lat],
+        zoom: Math.max(DEFAULT_ZOOM, city.zoom_level || DEFAULT_ZOOM),
+        pitch: 60,
+        bearing: -20,
+        attributionControl: false,
+      });
+
+      map.addControl(new ml.NavigationControl({ visualizePitch: true }), 'top-right');
 
     map.on('load', () => {
       if (map.getSource('openmaptiles') && !map.getLayer(BUILDINGS_LAYER.id)) {
@@ -492,15 +504,16 @@ const MapCanvas = forwardRef<MapCanvasHandle, Props>(({ restaurants, city, selec
     window.setTimeout(resizeMap, 250);
     const resizeObserver = new ResizeObserver(resizeMap);
     resizeObserver.observe(container);
-
-    return () => {
-      resizeObserver.disconnect();
-      controlStyle.remove();
+    addCleanup(() => resizeObserver.disconnect());
+    addCleanup(() => {
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current = [];
       map.remove();
       mapRef.current = null;
-    };
+    });
+  })();
+
+    return () => { cleanupFns.forEach(fn => fn()); };
   }, []);
 
   useEffect(() => {
@@ -518,26 +531,30 @@ const MapCanvas = forwardRef<MapCanvasHandle, Props>(({ restaurants, city, selec
   }, [city]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
+    (async () => {
+      const map = mapRef.current;
+      if (!map) return;
 
-    markersRef.current.forEach((marker) => marker.remove());
-    markersRef.current = restaurants.map((restaurant) => {
-      const element = createMarkerElement(
-        restaurant,
-        pinColors[restaurant.category],
-        restaurant.id === selectedId,
-        containerRef.current,
-        mapRef.current,
-        onSelectRef.current,
-        onGalleryOpenRef.current,
-        onGalleryCloseRef.current,
-      );
+      const ml = await getMaplibregl();
 
-      return new maplibregl.Marker({ element, anchor: 'center' })
-        .setLngLat([restaurant.lng, restaurant.lat])
-        .addTo(map);
-    });
+      markersRef.current.forEach((marker) => marker.remove());
+      markersRef.current = restaurants.map((restaurant) => {
+        const element = createMarkerElement(
+          restaurant,
+          pinColors[restaurant.category],
+          restaurant.id === selectedId,
+          containerRef.current,
+          mapRef.current,
+          onSelectRef.current,
+          onGalleryOpenRef.current,
+          onGalleryCloseRef.current,
+        );
+
+        return new ml.Marker({ element, anchor: 'center' })
+          .setLngLat([restaurant.lng, restaurant.lat])
+          .addTo(map);
+      });
+    })();
   }, [restaurants, selectedId, pinColors]);
 
   useImperativeHandle(ref, () => ({

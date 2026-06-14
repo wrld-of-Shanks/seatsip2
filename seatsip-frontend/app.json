@@ -30,6 +30,35 @@
         "backgroundColor": "#1a1a2e"
       },
       "package": "com.seatsip.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "seatsip",
+              "host": "*",
+              "pathPrefix": "/orders"
+            },
+            {
+              "scheme": "seatsip",
+              "host": "*",
+              "pathPrefix": "/reservations"
+            },
+            {
+              "scheme": "seatsip",
+              "host": "*",
+              "pathPrefix": "/explore"
+            },
+            {
+              "scheme": "seatsip",
+              "host": "*",
+              "pathPrefix": "/profile"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ],
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
