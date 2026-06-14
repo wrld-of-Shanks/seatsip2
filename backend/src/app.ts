@@ -15,6 +15,9 @@ import rewardsRouter from './api/rewards';
 import menuRouter from './api/menu';
 import bannersRouter from './api/banners';
 import exploreCategoriesRouter from './api/exploreCategories';
+import pointsRouter from './api/points';
+import subscriptionsRouter from './api/subscriptions';
+import offersRouter from './api/offers';
 import { corsMiddleware, helmetMiddleware, requestId, safeMorgan, sanitizeInput } from './security/http';
 import { secureLogger } from './security/logger';
 import { redactObjectForLog } from './security/redaction';
@@ -50,6 +53,9 @@ export function createApp(): express.Application {
   app.use('/api/v1/rewards', rewardsRouter);
   app.use('/api/v1/banners', bannersRouter);
   app.use('/api/v1/explore-categories', exploreCategoriesRouter);
+  app.use('/api/v1/points', pointsRouter);
+  app.use('/api/v1/subscriptions', subscriptionsRouter);
+  app.use('/api/v1/offers', offersRouter);
 
   app.use('*', (_, res) => res.status(404).json({ success: false, message: 'Endpoint not found' }));
 

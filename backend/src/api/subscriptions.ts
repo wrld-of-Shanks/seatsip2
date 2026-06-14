@@ -1,0 +1,271 @@
+import { Router, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
+import { z } from 'zod';
+import { prisma } from '../db';
+import { authenticate } from '../common/auth';
+import { AuthenticatedRequest } from '../types/authenticated-request';
+import { validate } from '../security/http';
+
+const subscriptionsRouter = Router();
+subscriptionsRouter.use(authenticate);
+
+// ─── Constants ─────────────────────────────────────────────────────────────────
+const SUBSCRIPTION_PRICE = 199;
+const SUBSCRIPTION_DURATION_DAYS = 30;
+
+async function sendNotification(userId: string, title: string, body: string, data?: Record<string, string>) {
+  try {
+    await prisma.notification.create({
+      data: {
+        id: uuidv4(),
+        user_id: userId,
+        title,
+        body,
+        type: 'SUBSCRIPTION',
+        data: JSON.stringify(data || {}),
+      },
+    });
+  } catch {
+    // silent
+  }
+}
+
+// ─── GET /api/v1/subscriptions/status ──────────────────────────────────────────
+subscriptionsRouter.get('/status', async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user?.userId;
+  if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { is_subscribed: true, subscription_expires_at: true },
+  });
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  const sub = await prisma.subscription.findUnique({
+    where: { user_id: userId },
+    select: { status: true, started_at: true, expires_at: true, auto_renew: true, plan_type: true, cancelled_at: true },
+  });
+
+  const isActive = user.is_subscribed && user.subscription_expires_at && user.subscription_expires_at > new Date();
+
+  return res.json({
+    success: true,
+    isSubscribed: isActive,
+    subscription: sub ? {
+      planType: sub.plan_type,
+      status: sub.status,
+      startedAt: sub.started_at,
+      expiresAt: sub.expires_at,
+      autoRenew: sub.auto_renew,
+      cancelledAt: sub.cancelled_at,
+      daysRemaining: sub.expires_at ? Math.max(0, Math.floor((sub.expires_at.getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : 0,
+    } : null,
+    benefits: {
+      bonusEarning: '1.5x points multiplier on all earning events',
+      noPointExpiry: 'Points never expire while subscription is active',
+      priorityRedemption: 'Redeem points even if slightly below reward cost',
+      birthdayMultiplier: '2x points on your birthday month',
+      streakRewards: 'Bonus points for consecutive visits',
+      promoBonus: 'Access to subscriber-only promotional codes',
+    },
+  });
+});
+
+// ─── POST /api/v1/subscriptions/activate ───────────────────────────────────────
+const activateSchema = z.object({
+  planType: z.enum(['MONTHLY', 'YEARLY']).optional().default('MONTHLY'),
+  paymentMethod: z.enum(['CARD', 'UPI']),
+});
+
+subscriptionsRouter.post('/activate', validate({ body: activateSchema }), async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user?.userId;
+  if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+  const { planType, paymentMethod } = req.body;
+
+  const durationDays = planType === 'YEARLY' ? 365 : SUBSCRIPTION_DURATION_DAYS;
+  const price = planType === 'YEARLY' ? Math.round(SUBSCRIPTION_PRICE * 12 * 0.85) : SUBSCRIPTION_PRICE;
+
+  const result = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({ where: { id: userId } });
+    if (!user) throw new Error('User not found');
+
+    if (user.is_subscribed && user.subscription_expires_at && user.subscription_expires_at > new Date()) {
+      // Extend existing subscription
+      const newExpiry = new Date(user.subscription_expires_at.getTime() + durationDays * 24 * 60 * 60 * 1000);
+
+      await tx.user.update({
+        where: { id: userId },
+        data: { subscription_expires_at: newExpiry },
+      });
+
+      await tx.subscription.upsert({
+        where: { user_id: userId },
+        create: {
+          id: uuidv4(),
+          user_id: userId,
+          plan_type: planType,
+          started_at: new Date(),
+          expires_at: newExpiry,
+          auto_renew: true,
+        },
+        update: {
+          expires_at: newExpiry,
+          status: 'ACTIVE',
+          auto_renew: true,
+          cancelled_at: null,
+        },
+      });
+
+      return { newExpiry, extended: true };
+    }
+
+    const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
+
+    await tx.user.update({
+      where: { id: userId },
+      data: {
+        is_subscribed: true,
+        subscription_expires_at: expiresAt,
+        last_activity_at: new Date(),
+      },
+    });
+
+    await tx.subscription.upsert({
+      where: { user_id: userId },
+      create: {
+        id: uuidv4(),
+        user_id: userId,
+        plan_type: planType,
+        started_at: new Date(),
+        expires_at: expiresAt,
+        auto_renew: true,
+      },
+      update: {
+        plan_type: planType,
+        status: 'ACTIVE',
+        expires_at: expiresAt,
+        started_at: new Date(),
+        cancelled_at: null,
+        auto_renew: true,
+      },
+    });
+
+    await tx.walletTransaction.create({
+      data: {
+        id: uuidv4(),
+        user_id: userId,
+        type: 'PURCHASE',
+        amount: price,
+        description: `${planType} Subscription — ₹${price} (${paymentMethod})`,
+        balance_after: user.wallet_balance,
+      },
+    });
+
+    return { expiresAt, extended: false };
+  });
+
+  await sendNotification(
+    userId,
+    result.extended ? 'Subscription Extended! 🎉' : 'Welcome to SeatSip Monthly! 🎉',
+    result.extended
+      ? `Your subscription has been extended to ${result.newExpiry.toLocaleDateString()}.`
+      : `Your subscription is active until ${result.expiresAt.toLocaleDateString()}. Enjoy 1.5x points, no expiry, and more!`,
+    { expiresAt: result.extended ? result.newExpiry!.toISOString() : result.expiresAt.toISOString() },
+  );
+
+  return res.json({
+    success: true,
+    message: result.extended ? 'Subscription extended successfully' : 'Subscription activated successfully',
+    subscription: {
+      planType,
+      expiresAt: result.extended ? result.newExpiry : result.expiresAt,
+      autoRenew: true,
+      amount: price,
+    },
+  });
+});
+
+// ─── POST /api/v1/subscriptions/cancel ─────────────────────────────────────────
+subscriptionsRouter.post('/cancel', async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user?.userId;
+  if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+  const result = await prisma.$transaction(async (tx) => {
+    const sub = await tx.subscription.findUnique({ where: { user_id: userId } });
+    if (!sub) throw new Error('No active subscription found');
+
+    await tx.subscription.update({
+      where: { user_id: userId },
+      data: {
+        auto_renew: false,
+        cancelled_at: new Date(),
+        status: 'CANCELLED',
+      },
+    });
+
+    // Don't revoke benefits immediately — they last until expiry
+    return { expiresAt: sub.expires_at };
+  });
+
+  await sendNotification(
+    userId,
+    'Subscription Cancelled',
+    `Your subscription will remain active until ${result.expiresAt.toLocaleDateString()}. After that, points will expire after 12 months of inactivity.`,
+  );
+
+  return res.json({
+    success: true,
+    message: `Subscription cancelled. Benefits continue until ${result.expiresAt.toLocaleDateString()}.`,
+    expiresAt: result.expiresAt,
+  });
+});
+
+// ─── POST /api/v1/subscriptions/auto-renew-check ───────────────────────────────
+subscriptionsRouter.post('/auto-renew-check', async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user?.userId;
+  if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+  const sub = await prisma.subscription.findUnique({ where: { user_id: userId } });
+  if (!sub) return res.json({ success: true, needsRenewal: false });
+
+  if (!sub.auto_renew || sub.status !== 'ACTIVE') {
+    return res.json({ success: true, needsRenewal: false, message: 'Auto-renew is disabled or subscription is not active' });
+  }
+
+  const daysUntilExpiry = Math.max(0, Math.floor((sub.expires_at.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+
+  if (daysUntilExpiry <= 0) {
+    // Auto-renew: extend by the plan duration
+    const durationDays = sub.plan_type === 'YEARLY' ? 365 : SUBSCRIPTION_DURATION_DAYS;
+    const newExpiry = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.subscription.update({
+        where: { user_id: userId },
+        data: { expires_at: newExpiry, status: 'ACTIVE' },
+      });
+      await tx.user.update({
+        where: { id: userId },
+        data: { is_subscribed: true, subscription_expires_at: newExpiry },
+      });
+    });
+
+    await sendNotification(
+      userId,
+      'Subscription Auto-Renewed 🔄',
+      `Your ${sub.plan_type} subscription has been renewed until ${newExpiry.toLocaleDateString()}.`,
+    );
+
+    return res.json({ success: true, needsRenewal: false, renewed: true, newExpiry });
+  }
+
+  return res.json({
+    success: true,
+    needsRenewal: daysUntilExpiry <= 7,
+    daysUntilExpiry,
+    autoRenew: sub.auto_renew,
+  });
+});
+
+export default subscriptionsRouter;

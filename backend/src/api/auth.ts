@@ -28,7 +28,7 @@ import {
   setRefreshTokenCookie,
   useBrowserRefreshCookie,
 } from '../common/refreshCookie';
-import { generateAndSendOtp, verifyOtp } from '../services/otpService';
+import { generateAndSendOtpWithChannel, verifyOtp } from '../services/otpService';
 import os from 'os';
 
 const router = Router();
@@ -164,6 +164,7 @@ const verifyPasswordSchema = z.object({ password: z.string().min(1).max(128) });
 
 const requestForgotOtpSchema = z.object({
   email: z.string().email({ message: 'Enter a valid email address' }).max(254).transform((email) => email.toLowerCase()),
+  channel: z.enum(['email', 'phone']).optional().default('email'),
 });
 
 const resetPasswordWithOtpSchema = z.object({
@@ -828,17 +829,21 @@ router.post(
   audit('FORGOT_PASSWORD_REQUEST', 'auth'),
   async (req, res) => {
     try {
-      const { email } = req.body as z.infer<typeof requestForgotOtpSchema>;
-      const user = await prisma.user.findUnique({ where: { email }, select: { id: true, is_active: true } });
-      
+      const { email, channel } = req.body as z.infer<typeof requestForgotOtpSchema>;
+      const user = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true, is_active: true, phone: true },
+      });
+
       // For security, always return generic success message to prevent user enumeration
       if (user && user.is_active === 1) {
-        await generateAndSendOtp(email);
+        const phone = channel === 'phone' ? user.phone : null;
+        await generateAndSendOtpWithChannel(email, phone, channel);
       }
-      
+
       return res.json({
         success: true,
-        message: 'If this email is registered, we have sent a 6-digit OTP code to verify.',
+        message: `If this email is registered, we have sent a 6-digit OTP code via ${channel}.`,
       });
     } catch (err: unknown) {
       secureLogger.error('forgot password request failed', err);

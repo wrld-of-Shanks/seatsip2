@@ -91,7 +91,8 @@ const GALLERY_IMAGES = [
 function setupMarkerClick(
   el: HTMLElement,
   mapContainer: HTMLElement,
-  cafeName: string,
+  map: MapLibreMap | null,
+  restaurant: Restaurant,
   onGalleryOpen?: () => void,
   onGalleryClose?: () => void,
 ) {
@@ -102,85 +103,102 @@ function setupMarkerClick(
   if ((el as any).__ringActive) return;
   (el as any).__ringActive = true;
 
-  // Step 1: Make sure the marker's parent doesn't clip the ring
-  const markerParent = el.parentElement!;
-  markerParent.style.overflow = 'visible';
+  function startRing() {
+    // Step 1: Make sure the marker's parent doesn't clip the ring
+    const markerParent = el.parentElement!;
+    markerParent.style.overflow = 'visible';
 
-  // Step 2: Calculate marker center relative to its parent using
-  // getBoundingClientRect — this accounts for MapLibre's CSS transforms
-  const elRect = el.getBoundingClientRect();
-  const parentRect = markerParent.getBoundingClientRect();
+    // Step 2: Calculate marker center relative to its parent using
+    // getBoundingClientRect — this accounts for MapLibre's CSS transforms
+    const elRect = el.getBoundingClientRect();
+    const parentRect = markerParent.getBoundingClientRect();
 
-  const cx = elRect.left - parentRect.left + elRect.width / 2;
-  const cy = elRect.top - parentRect.top + elRect.height / 2;
+    const cx = elRect.left - parentRect.left + elRect.width / 2;
+    const cy = elRect.top - parentRect.top + elRect.height / 2;
 
-  // Step 3: Size the SVG around the center point so the ring is
-  // perfectly centered over the marker regardless of its map position
-  const SVG_SIZE = 80;
-  const svgLeft = cx - SVG_SIZE / 2;
-  const svgTop  = cy - SVG_SIZE / 2;
+    // Step 3: Size the SVG around the center point so the ring is
+    // perfectly centered over the marker regardless of its map position
+    const SVG_SIZE = 80;
+    const svgLeft = cx - SVG_SIZE / 2;
+    const svgTop  = cy - SVG_SIZE / 2;
 
-  // Step 4: Build the SVG — innerHTML once, no duplicate appends, no
-  // manual createElementNS for circles (avoids wipe bug)
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('width', String(SVG_SIZE));
-  svg.setAttribute('height', String(SVG_SIZE));
-  svg.style.cssText = `
-    position: absolute;
-    top: ${svgTop}px;
-    left: ${svgLeft}px;
-    pointer-events: none;
-    z-index: 99999;
-    overflow: visible;
-  `;
+    // Step 4: Build the SVG — innerHTML once, no duplicate appends, no
+    // manual createElementNS for circles (avoids wipe bug)
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', String(SVG_SIZE));
+    svg.setAttribute('height', String(SVG_SIZE));
+    svg.style.cssText = `
+      position: absolute;
+      top: ${svgTop}px;
+      left: ${svgLeft}px;
+      pointer-events: none;
+      z-index: 99999;
+      overflow: visible;
+    `;
 
-  svg.innerHTML = `
-    <circle cx="40" cy="40" r="${RADIUS}" fill="none"
-      stroke="rgba(255,255,255,0.35)" stroke-width="4"/>
-    <circle id="seatsip-ring-fill"
-      cx="40" cy="40" r="${RADIUS}" fill="none"
-      stroke="#ff7a3d" stroke-width="4" stroke-linecap="round"
-      stroke-dasharray="${CIRCUMFERENCE}"
-      stroke-dashoffset="${CIRCUMFERENCE}"
-      transform="rotate(-90 40 40)"/>
-  `;
+    svg.innerHTML = `
+      <circle cx="40" cy="40" r="${RADIUS}" fill="none"
+        stroke="rgba(255,255,255,0.35)" stroke-width="4"/>
+      <circle id="seatsip-ring-fill"
+        cx="40" cy="40" r="${RADIUS}" fill="none"
+        stroke="#ff7a3d" stroke-width="4" stroke-linecap="round"
+        stroke-dasharray="${CIRCUMFERENCE}"
+        stroke-dashoffset="${CIRCUMFERENCE}"
+        transform="rotate(-90 40 40)"/>
+    `;
 
-  // Step 5: Append SVG as sibling — never wrap or move el
-  markerParent.appendChild(svg);
+    // Step 5: Append SVG as sibling — never wrap or move el
+    markerParent.appendChild(svg);
 
-  // Step 6: Keep the marker button on top of the ring
-  el.style.position = 'relative';
-  el.style.zIndex   = '100000';
+    // Step 6: Keep the marker button on top of the ring
+    el.style.position = 'relative';
+    el.style.zIndex   = '100000';
 
-  const ring = svg.querySelector('#seatsip-ring-fill') as SVGCircleElement | null;
+    const ring = svg.querySelector('#seatsip-ring-fill') as SVGCircleElement | null;
 
-  // Step 7: Animate with rAF — no CSS transitions, no fights with
-  // MapLibre's internal transform handling
-  const startTime = performance.now();
-  const DURATION  = 1400;
+    // Step 7: Animate with rAF — no CSS transitions, no fights with
+    // MapLibre's internal transform handling
+    const startTime = performance.now();
+    const DURATION  = 1400;
 
-  function animate(now: number) {
-    const progress = Math.min((now - startTime) / DURATION, 1);
+    function animate(now: number) {
+      const progress = Math.min((now - startTime) / DURATION, 1);
 
-    ring?.setAttribute(
-      'stroke-dashoffset',
-      String(CIRCUMFERENCE * (1 - progress)),
-    );
+      ring?.setAttribute(
+        'stroke-dashoffset',
+        String(CIRCUMFERENCE * (1 - progress)),
+      );
 
-    if (progress < 1) {
-      requestAnimationFrame(animate);
-    } else {
-      // Brief pause so the user sees the completed ring
-      setTimeout(() => {
-        svg.parentNode?.removeChild(svg);
-        el.style.zIndex = '';
-        (el as any).__ringActive = false;
-        openGallery(mapContainer, cafeName, onGalleryOpen, onGalleryClose);
-      }, 80);
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        // Brief pause so the user sees the completed ring
+        setTimeout(() => {
+          svg.parentNode?.removeChild(svg);
+          el.style.zIndex = '';
+          (el as any).__ringActive = false;
+          openGallery(mapContainer, restaurant.name, onGalleryOpen, onGalleryClose);
+        }, 80);
+      }
     }
+
+    requestAnimationFrame(animate);
   }
 
-  requestAnimationFrame(animate);
+  // Fly to the marker first, then start the ring animation
+  if (map) {
+    map.flyTo({
+      center: [restaurant.lng, restaurant.lat],
+      zoom: 16.2,
+      pitch: 62,
+      bearing: 10,
+      duration: 900,
+      essential: true,
+    });
+    map.once('moveend', startRing);
+  } else {
+    startRing();
+  }
 }
 
 /**
@@ -356,6 +374,7 @@ function createMarkerElement(
   color: string,
   selected: boolean,
   mapContainer: HTMLElement | null,
+  map: MapLibreMap | null,
   onSelect: (restaurant: Restaurant) => void,
   onGalleryOpen?: () => void,
   onGalleryClose?: () => void,
@@ -382,7 +401,9 @@ function createMarkerElement(
   element.textContent = markerLabel(restaurant.category);
 
   element.addEventListener('click', () => {
-    onSelect(restaurant);
+    if (mapContainer) {
+      setupMarkerClick(element, mapContainer, map, restaurant, onGalleryOpen, onGalleryClose);
+    }
   });
 
   return element;
@@ -507,6 +528,7 @@ const MapCanvas = forwardRef<MapCanvasHandle, Props>(({ restaurants, city, selec
         pinColors[restaurant.category],
         restaurant.id === selectedId,
         containerRef.current,
+        mapRef.current,
         onSelectRef.current,
         onGalleryOpenRef.current,
         onGalleryCloseRef.current,

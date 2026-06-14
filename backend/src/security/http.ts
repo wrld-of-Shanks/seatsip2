@@ -42,10 +42,10 @@ export const corsMiddleware = cors({
 
     if (process.env.NODE_ENV !== 'production') {
       if (/^https?:\/\/localhost(:\d+)?$/i.test(origin) || /^https?:\/\/127\.0\.0\.1(:\d+)?$/i.test(origin)) {
-        return callback(null, true);
+        return callback(null, origin);
       }
       secureLogger.warn('CORS: non-localhost origin allowed in development', redactSensitive(origin));
-      return callback(null, true);
+      return callback(null, origin);
     }
 
     if (allowedOrigins.length === 0) {
