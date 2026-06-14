@@ -19,7 +19,7 @@ async function main() {
         email: 'anirudh@gmail.com',
         role: 'CAFE_OWNER',
         password_hash: passwordHash,
-        is_active: 1,
+        is_active: true,
       },
     });
     console.log(`Created Cafe Owner user: ${user.email}`);
@@ -50,8 +50,8 @@ async function main() {
         address: '456 Explore Road, Bangalore',
         city: 'Bangalore',
         owner_id: user.id,
-        is_open: 1,
-        is_active: 1,
+        is_open: true,
+        is_active: true,
         moods: JSON.stringify(exploreMoods),
       },
     });

@@ -6,7 +6,7 @@ import { prisma } from '../db';
 export async function purgeAccountsPastDeletionDeadline(): Promise<number> {
   const due = await prisma.user.findMany({
     where: {
-      is_active: 0,
+      is_active: false,
       deletion_scheduled_at: { not: null, lte: new Date() },
     },
     select: { id: true },
@@ -24,13 +24,11 @@ export async function purgeAccountsPastDeletionDeadline(): Promise<number> {
         phone: null,
         google_id: null,
         avatar: null,
-        push_token: null,
-        push_token_updated_at: null,
         password_hash: passwordHash,
         wallet_balance: 0,
         loyalty_points: 0,
         deletion_scheduled_at: null,
-        is_active: 0,
+        is_active: false,
       },
     });
     n += 1;

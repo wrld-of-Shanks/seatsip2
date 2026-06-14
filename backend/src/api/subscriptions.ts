@@ -5,6 +5,7 @@ import { prisma } from '../db';
 import { authenticate } from '../common/auth';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 import { validate } from '../security/http';
+import { razorpay, verifyRazorpayPaymentSignature } from '../payments/razorpay';
 
 const subscriptionsRouter = Router();
 subscriptionsRouter.use(authenticate);
@@ -37,7 +38,7 @@ subscriptionsRouter.get('/status', async (req: AuthenticatedRequest, res: Respon
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { is_subscribed: true, subscription_expires_at: true },
+    select: { is_subscribed: true, subscription_expires_at: true, wallet_balance: true },
   });
   if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
@@ -47,6 +48,9 @@ subscriptionsRouter.get('/status', async (req: AuthenticatedRequest, res: Respon
   });
 
   const isActive = user.is_subscribed && user.subscription_expires_at && user.subscription_expires_at > new Date();
+
+  const durationDays = sub?.plan_type === 'YEARLY' ? 365 : SUBSCRIPTION_DURATION_DAYS;
+  const price = sub?.plan_type === 'YEARLY' ? Math.round(SUBSCRIPTION_PRICE * 12 * 0.85) : SUBSCRIPTION_PRICE;
 
   return res.json({
     success: true,
@@ -68,36 +72,110 @@ subscriptionsRouter.get('/status', async (req: AuthenticatedRequest, res: Respon
       streakRewards: 'Bonus points for consecutive visits',
       promoBonus: 'Access to subscriber-only promotional codes',
     },
+    walletBalance: Number(user.wallet_balance),
+    subscriptionPrice: price,
   });
+});
+
+// ─── POST /api/v1/subscriptions/create-order ───────────────────────────────────
+// Creates a Razorpay order for the subscription price so client can process payment
+const createOrderSchema = z.object({
+  planType: z.enum(['MONTHLY', 'YEARLY']).optional().default('MONTHLY'),
+});
+
+subscriptionsRouter.post('/create-order', validate({ body: createOrderSchema }), async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user?.userId;
+  if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+  const { planType } = req.body;
+  const amountPaise = (planType === 'YEARLY' ? Math.round(SUBSCRIPTION_PRICE * 12 * 0.85) : SUBSCRIPTION_PRICE) * 100;
+
+  try {
+    const order = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: 'INR',
+      receipt: `sub_${userId.slice(0, 8)}_${Date.now()}`,
+      notes: { userId, planType },
+    });
+
+    return res.json({
+      success: true,
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+    });
+  } catch (err: any) {
+    return res.status(502).json({ success: false, message: 'Failed to create payment order', error: err.message });
+  }
 });
 
 // ─── POST /api/v1/subscriptions/activate ───────────────────────────────────────
 const activateSchema = z.object({
   planType: z.enum(['MONTHLY', 'YEARLY']).optional().default('MONTHLY'),
-  paymentMethod: z.enum(['CARD', 'UPI']),
+  paymentMethod: z.enum(['WALLET', 'RAZORPAY']),
+  razorpay_payment_id: z.string().optional(),
+  razorpay_order_id: z.string().optional(),
+  razorpay_signature: z.string().optional(),
 });
 
 subscriptionsRouter.post('/activate', validate({ body: activateSchema }), async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.userId;
   if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
 
-  const { planType, paymentMethod } = req.body;
+  const { planType, paymentMethod, razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
   const durationDays = planType === 'YEARLY' ? 365 : SUBSCRIPTION_DURATION_DAYS;
   const price = planType === 'YEARLY' ? Math.round(SUBSCRIPTION_PRICE * 12 * 0.85) : SUBSCRIPTION_PRICE;
+
+  // Verify payment for RAZORPAY method
+  if (paymentMethod === 'RAZORPAY') {
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+      return res.status(400).json({ success: false, message: 'Missing Razorpay payment details' });
+    }
+    const isValid = verifyRazorpayPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+    if (!isValid) {
+      return res.status(402).json({ success: false, message: 'Payment verification failed' });
+    }
+  }
 
   const result = await prisma.$transaction(async (tx) => {
     const user = await tx.user.findUnique({ where: { id: userId } });
     if (!user) throw new Error('User not found');
 
+    if (paymentMethod === 'WALLET') {
+      if (Number(user.wallet_balance) < price) {
+        throw new Error(`Insufficient wallet balance. Need ₹${price}, have ₹${Number(user.wallet_balance)}`);
+      }
+    }
+
     if (user.is_subscribed && user.subscription_expires_at && user.subscription_expires_at > new Date()) {
       // Extend existing subscription
       const newExpiry = new Date(user.subscription_expires_at.getTime() + durationDays * 24 * 60 * 60 * 1000);
 
-      await tx.user.update({
-        where: { id: userId },
-        data: { subscription_expires_at: newExpiry },
-      });
+      if (paymentMethod === 'WALLET') {
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            subscription_expires_at: newExpiry,
+            wallet_balance: { decrement: price },
+          },
+        });
+        await tx.walletTransaction.create({
+          data: {
+            id: uuidv4(),
+            user_id: userId,
+            type: 'PURCHASE',
+            amount: -price,
+            description: `${planType} Subscription extension — ₹${price}`,
+            balance_after: Number(user.wallet_balance) - price,
+          },
+        });
+      } else {
+        await tx.user.update({
+          where: { id: userId },
+          data: { subscription_expires_at: newExpiry },
+        });
+      }
 
       await tx.subscription.upsert({
         where: { user_id: userId },
@@ -122,14 +200,48 @@ subscriptionsRouter.post('/activate', validate({ body: activateSchema }), async 
 
     const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
 
-    await tx.user.update({
-      where: { id: userId },
-      data: {
-        is_subscribed: true,
-        subscription_expires_at: expiresAt,
-        last_activity_at: new Date(),
-      },
-    });
+    if (paymentMethod === 'WALLET') {
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          is_subscribed: true,
+          subscription_expires_at: expiresAt,
+          wallet_balance: { decrement: price },
+          last_activity_at: new Date(),
+        },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          id: uuidv4(),
+          user_id: userId,
+          type: 'PURCHASE',
+          amount: -price,
+          description: `${planType} Subscription — ₹${price} (Wallet)`,
+          balance_after: Number(user.wallet_balance) - price,
+        },
+      });
+    } else {
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          is_subscribed: true,
+          subscription_expires_at: expiresAt,
+          last_activity_at: new Date(),
+        },
+      });
+      if (razorpay_payment_id) {
+        await tx.walletTransaction.create({
+          data: {
+            id: uuidv4(),
+            user_id: userId,
+            type: 'PURCHASE',
+            amount: price,
+            description: `${planType} Subscription — ₹${price} (Razorpay ${razorpay_payment_id.slice(0, 8)})`,
+            balance_after: Number(user.wallet_balance),
+          },
+        });
+      }
+    }
 
     await tx.subscription.upsert({
       where: { user_id: userId },
@@ -151,23 +263,12 @@ subscriptionsRouter.post('/activate', validate({ body: activateSchema }), async 
       },
     });
 
-    await tx.walletTransaction.create({
-      data: {
-        id: uuidv4(),
-        user_id: userId,
-        type: 'PURCHASE',
-        amount: price,
-        description: `${planType} Subscription — ₹${price} (${paymentMethod})`,
-        balance_after: user.wallet_balance,
-      },
-    });
-
     return { expiresAt, extended: false };
   });
 
   await sendNotification(
     userId,
-    result.extended ? 'Subscription Extended! 🎉' : 'Welcome to SeatSip Monthly! 🎉',
+    result.extended ? 'Subscription Extended!' : 'Welcome to SeatSip Monthly!',
     result.extended
       ? `Your subscription has been extended to ${result.newExpiry.toLocaleDateString()}.`
       : `Your subscription is active until ${result.expiresAt.toLocaleDateString()}. Enjoy 1.5x points, no expiry, and more!`,
@@ -238,26 +339,67 @@ subscriptionsRouter.post('/auto-renew-check', async (req: AuthenticatedRequest, 
   if (daysUntilExpiry <= 0) {
     // Auto-renew: extend by the plan duration
     const durationDays = sub.plan_type === 'YEARLY' ? 365 : SUBSCRIPTION_DURATION_DAYS;
+    const price = sub.plan_type === 'YEARLY' ? Math.round(SUBSCRIPTION_PRICE * 12 * 0.85) : SUBSCRIPTION_PRICE;
     const newExpiry = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
 
-    await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUnique({ where: { id: userId }, select: { wallet_balance: true } });
+      const balance = Number(user?.wallet_balance || 0);
+
+      if (balance < price) {
+        // Insufficient funds — disable auto-renew, expire subscription, notify user
+        await tx.subscription.update({
+          where: { user_id: userId },
+          data: { auto_renew: false, status: 'EXPIRED' },
+        });
+        await tx.user.update({
+          where: { id: userId },
+          data: { is_subscribed: false, subscription_expires_at: null },
+        });
+        return { renewed: false, reason: 'insufficient_funds', newExpiry: null };
+      }
+
       await tx.subscription.update({
         where: { user_id: userId },
         data: { expires_at: newExpiry, status: 'ACTIVE' },
       });
       await tx.user.update({
         where: { id: userId },
-        data: { is_subscribed: true, subscription_expires_at: newExpiry },
+        data: {
+          is_subscribed: true,
+          subscription_expires_at: newExpiry,
+          wallet_balance: { decrement: price },
+        },
       });
+      await tx.walletTransaction.create({
+        data: {
+          id: uuidv4(),
+          user_id: userId,
+          type: 'PURCHASE',
+          amount: -price,
+          description: `${sub.plan_type} Subscription Auto-Renew — ₹${price}`,
+          balance_after: balance - price,
+        },
+      });
+
+      return { renewed: true, reason: null, newExpiry };
     });
+
+    if (result.renewed) {
+      await sendNotification(
+        userId,
+        'Subscription Auto-Renewed',
+        `Your ${sub.plan_type} subscription has been renewed until ${result.newExpiry!.toLocaleDateString()}. ₹${price} charged from wallet.`,
+      );
+      return res.json({ success: true, needsRenewal: false, renewed: true, newExpiry: result.newExpiry });
+    }
 
     await sendNotification(
       userId,
-      'Subscription Auto-Renewed 🔄',
-      `Your ${sub.plan_type} subscription has been renewed until ${newExpiry.toLocaleDateString()}.`,
+      'Subscription Expired — Insufficient Wallet Balance',
+      `Your ${sub.plan_type} subscription could not be auto-renewed. Please add funds to your wallet and re-subscribe.`,
     );
-
-    return res.json({ success: true, needsRenewal: false, renewed: true, newExpiry });
+    return res.json({ success: true, needsRenewal: false, renewed: false, reason: result.reason });
   }
 
   return res.json({

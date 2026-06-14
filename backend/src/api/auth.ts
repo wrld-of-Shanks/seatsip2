@@ -30,21 +30,15 @@ import {
 } from '../common/refreshCookie';
 import { generateAndSendOtpWithChannel, verifyOtp } from '../services/otpService';
 import os from 'os';
+import { redisClient } from '../security/rateLimit';
 
 const router = Router();
 
-// In-memory sessions store mapping ID to coordinates and timestamp
-const mobileLocationSessions = new Map<string, { latitude: number | null; longitude: number | null; createdAt: number }>();
+const SESSION_TTL = 300; // 5 minutes in seconds
 
-// Clean up expired sessions every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, session] of mobileLocationSessions.entries()) {
-    if (now - session.createdAt > 5 * 60 * 1000) {
-      mobileLocationSessions.delete(id);
-    }
-  }
-}, 5 * 60 * 1000);
+function sessionKey(id: string): string {
+  return `mobile_session:${id}`;
+}
 
 function getLocalIpAddress(): string {
   const interfaces = os.networkInterfaces();
@@ -71,12 +65,15 @@ const submitLocationSchema = z.object({
 router.post('/mobile-location/session', async (req, res) => {
   try {
     const sessionId = uuidv4();
-    mobileLocationSessions.set(sessionId, {
+    const data = JSON.stringify({
       latitude: null,
       longitude: null,
       source: null,
       createdAt: Date.now(),
-    } as any);
+    });
+    if (redisClient) {
+      await redisClient.set(sessionKey(sessionId), data, { EX: SESSION_TTL });
+    }
     const ip = getLocalIpAddress();
     return res.status(201).json({
       success: true,
@@ -92,7 +89,11 @@ router.post('/mobile-location/session', async (req, res) => {
 // Get coordinates for desktop polling
 router.get('/mobile-location/session/:id', async (req, res) => {
   const { id } = req.params;
-  const session = mobileLocationSessions.get(id);
+  let session: { latitude: number | null; longitude: number | null; source: string | null; createdAt: number } | null = null;
+  if (redisClient) {
+    const raw = await redisClient.get(sessionKey(id));
+    if (raw) session = JSON.parse(raw);
+  }
   if (!session) {
     return res.status(404).json({ success: false, message: 'Session not found or expired' });
   }
@@ -100,7 +101,7 @@ router.get('/mobile-location/session/:id', async (req, res) => {
     success: true,
     latitude: session.latitude,
     longitude: session.longitude,
-    source: (session as any).source || null,
+    source: session.source || null,
   });
 });
 
@@ -111,15 +112,21 @@ router.post(
   async (req, res) => {
     try {
       const { id } = req.params;
-      const session = mobileLocationSessions.get(id);
+      let session: { latitude: number | null; longitude: number | null; source: string | null; createdAt: number } | null = null;
+      if (redisClient) {
+        const raw = await redisClient.get(sessionKey(id));
+        if (raw) session = JSON.parse(raw);
+      }
       if (!session) {
         return res.status(404).json({ success: false, message: 'Session not found or expired' });
       }
       const { latitude, longitude, source } = req.body as z.infer<typeof submitLocationSchema>;
       session.latitude = latitude;
       session.longitude = longitude;
-      (session as any).source = source || null;
-      mobileLocationSessions.set(id, session);
+      session.source = source || null;
+      if (redisClient) {
+        await redisClient.set(sessionKey(id), JSON.stringify(session), { EX: SESSION_TTL });
+      }
       return res.json({
         success: true,
         message: 'Location synchronized successfully',
@@ -212,7 +219,7 @@ function userPublicFields(u: {
   email: string;
   phone: string | null;
   role: string;
-  wallet_balance: number;
+  wallet_balance: any;
   loyalty_points: number;
   loyalty_tier: string;
   avatar: string | null;
@@ -364,7 +371,7 @@ router.post(
             phone: body.phone,
             password_hash: passwordHash,
             role: 'CAFE_OWNER',
-            is_active: 0,
+            is_active: false,
             auth_provider: 'owner_pending',
             government_id: body.governmentId,
             business_license: body.businessLicense || null,
@@ -387,7 +394,7 @@ router.post(
             owner_id: ownerId,
             image_url: body.cafePhotos?.[0] || null,
             images: JSON.stringify(body.cafePhotos || []),
-            is_active: 0,
+            is_active: false,
             open_time: openTime,
             close_time: closeTime,
             tags: JSON.stringify([
@@ -456,7 +463,7 @@ router.post(
         }
         user = await prisma.user.findUnique({ where: { id: userId } });
       } else {
-        if (user.is_active !== 1) {
+        if (!user.is_active) {
           return res.status(403).json({ success: false, message: 'Account disabled' });
         }
         if (user.google_id && user.google_id !== profile.googleId) {
@@ -508,7 +515,7 @@ router.post(
 router.post('/login', authLoginLimiter, validate({ body: loginSchema }), audit('LOGIN', 'auth'), async (req, res) => {
   try {
     const { email, password } = req.body as z.infer<typeof loginSchema>;
-    const user = await prisma.user.findFirst({ where: { email, is_active: 1 } });
+    const user = await prisma.user.findFirst({ where: { email, is_active: true } });
 
     if (!user) {
       const inactiveOwner = await prisma.user.findUnique({
@@ -589,7 +596,7 @@ router.post('/refresh', authRefreshLimiter, validate({ body: refreshBodySchema }
   }
 
   const user = await prisma.user.findFirst({
-    where: { id: storedToken.user_id, is_active: 1 },
+    where: { id: storedToken.user_id, is_active: true },
     select: { id: true, email: true, role: true },
   });
   if (!user) return res.status(401).json({ success: false, message: 'User not found' });
@@ -724,7 +731,7 @@ router.post(
       const graceEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
       await prisma.user.update({
         where: { id: userId },
-        data: { is_active: 0, deletion_scheduled_at: graceEnd },
+        data: { is_active: false, deletion_scheduled_at: graceEnd },
       });
 
       const row = await prisma.user.findUnique({
@@ -812,7 +819,7 @@ router.post(
 
       await prisma.user.update({
         where: { id: user.id },
-        data: { is_active: 1, deletion_scheduled_at: null },
+        data: { is_active: true, deletion_scheduled_at: null },
       });
 
       return res.json({ success: true, message: 'Account deletion cancelled. You can sign in again.' });
@@ -836,7 +843,7 @@ router.post(
       });
 
       // For security, always return generic success message to prevent user enumeration
-      if (user && user.is_active === 1) {
+      if (user && user.is_active) {
         const phone = channel === 'phone' ? user.phone : null;
         await generateAndSendOtpWithChannel(email, phone, channel);
       }
@@ -861,7 +868,7 @@ router.post(
       const { email, otp, password } = req.body as z.infer<typeof resetPasswordWithOtpSchema>;
       
       const user = await prisma.user.findUnique({ where: { email }, select: { id: true, name: true, is_active: true } });
-      if (!user || user.is_active !== 1) {
+      if (!user || !user.is_active) {
         return res.status(400).json({ success: false, message: 'Invalid email or verification code' });
       }
       

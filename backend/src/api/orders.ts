@@ -187,7 +187,7 @@ router.post('/', validate({ body: createOrderSchema }), audit('ORDER_CREATE', 'o
           where: { id: req.user.userId },
           select: { wallet_balance: true },
         });
-        if (!dbUser || dbUser.wallet_balance < total) throw new Error('Insufficient wallet balance');
+        if (!dbUser || Number(dbUser.wallet_balance) < total) throw new Error('Insufficient wallet balance');
         await tx.user.update({
           where: { id: req.user.userId },
           data: { wallet_balance: { decrement: total } },
@@ -204,7 +204,7 @@ router.post('/', validate({ body: createOrderSchema }), audit('ORDER_CREATE', 'o
             amount: total,
             description: `Order payment at ${cafe.name}`,
             reference_id: orderId,
-            balance_after: updated!.wallet_balance,
+            balance_after: Number(updated!.wallet_balance),
           },
         });
       }
@@ -323,10 +323,10 @@ async function refundOrder(req: AuthenticatedRequest, res: Response, orderId: st
           amount,
           description: reason,
           reference_id: order.id,
-          balance_after: updated!.wallet_balance,
+          balance_after: Number(updated!.wallet_balance),
         },
       });
-      return updated!.wallet_balance;
+      return Number(updated!.wallet_balance);
     });
     return res.json({ success: true, data: { wallet_balance: walletBalance } });
   }
@@ -401,10 +401,10 @@ router.patch('/:id/cancel', validate({ params: idParamsSchema }), audit('ORDER_C
             amount: order.total,
             description: 'Order cancellation refund',
             reference_id: order.id,
-            balance_after: updated!.wallet_balance,
+            balance_after: Number(updated!.wallet_balance),
           },
         });
-        return updated!.wallet_balance as number;
+        return Number(updated!.wallet_balance);
       });
       return res.json({ success: true, data: { order_id: order.id, status: 'CANCELLED', wallet_balance: walletBalance } });
     } catch (error: unknown) {

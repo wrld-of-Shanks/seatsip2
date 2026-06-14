@@ -297,7 +297,7 @@ usersRouter.post('/wallet/topup/verify', validate({ body: walletTopupVerifySchem
         type: 'TOPUP',
         amount: event.amount,
         description: 'Wallet top-up via Razorpay',
-        balance_after: updated!.wallet_balance,
+        balance_after: Number(updated!.wallet_balance),
         razorpay_order_id,
         razorpay_payment_id,
       },
@@ -327,7 +327,7 @@ notificationsRouter.use(authenticate);
 
 notificationsRouter.get('/unread-count', audit('NOTIFICATIONS_UNREAD', 'notification'), async (req: AuthenticatedRequest, res: Response) => {
   const count = await prisma.notification.count({
-    where: { user_id: req.user.userId, is_read: 0 },
+    where: { user_id: req.user.userId, is_read: false },
   });
   return res.json({ success: true, data: { count } });
 });
@@ -339,7 +339,7 @@ notificationsRouter.get('/', audit('NOTIFICATIONS_READ', 'notification'), async 
       orderBy: { created_at: 'desc' },
       take: 50,
     }),
-    prisma.notification.count({ where: { user_id: req.user.userId, is_read: 0 } }),
+    prisma.notification.count({ where: { user_id: req.user.userId, is_read: false } }),
   ]);
   return res.json({ success: true, data: notifs, unread });
 });
@@ -347,7 +347,7 @@ notificationsRouter.get('/', audit('NOTIFICATIONS_READ', 'notification'), async 
 notificationsRouter.patch('/read-all', audit('NOTIFICATIONS_READ_ALL', 'notification'), async (req: AuthenticatedRequest, res: Response) => {
   await prisma.notification.updateMany({
     where: { user_id: req.user.userId },
-    data: { is_read: 1 },
+    data: { is_read: true },
   });
   return res.json({ success: true });
 });

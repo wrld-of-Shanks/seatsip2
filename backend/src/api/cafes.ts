@@ -40,7 +40,7 @@ function rangesOverlap(aStart: number, aDur: number, bStart: number, bDur: numbe
 
 function cafeWhereByIdOrSlug(idOrSlug: string): Prisma.CafeWhereInput {
   return {
-    is_active: 1,
+    is_active: true,
     OR: [{ id: idOrSlug }, { slug: idOrSlug }],
   };
 }
@@ -49,7 +49,7 @@ function cafeWhereByIdOrSlug(idOrSlug: string): Prisma.CafeWhereInput {
 router.get('/', async (req: Request, res: Response) => {
   const { city, mood, search, sort = 'rating', limit = '20', offset = '0', lat, lng } = req.query as Record<string, string>;
 
-  const where: Prisma.CafeWhereInput = { is_active: 1 };
+  const where: Prisma.CafeWhereInput = { is_active: true };
   if (city) where.city = { contains: city };
   if (mood) where.moods = { contains: mood };
   if (search) {
@@ -107,9 +107,9 @@ router.get('/popular-items', async (req: Request, res: Response) => {
 
   const items = await prisma.menuItem.findMany({
     where: { 
-      is_popular: 1,
-      is_available: 1,
-      cafe: { is_active: 1 }
+      is_popular: true,
+      is_available: true,
+      cafe: { is_active: true }
     },
     include: {
       cafe: { select: { name: true, id: true, latitude: true, longitude: true, rating: true, review_count: true, priority: true } }
@@ -204,7 +204,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     where: cafeWhereByIdOrSlug(req.params.id),
     include: {
       menu_items: {
-        where: { is_available: 1 },
+        where: { is_available: true },
         orderBy: [{ is_popular: 'desc' }, { name: 'asc' }],
         include: {
           category: {
@@ -219,7 +219,7 @@ router.get('/:id', async (req: Request, res: Response) => {
   const [tables, categories] = await Promise.all([
     prisma.table.findMany({ where: { cafe_id: cafe.id } }),
     prisma.menuCategory.findMany({
-      where: { cafe_id: cafe.id, is_active: 1 },
+      where: { cafe_id: cafe.id, is_active: true },
       orderBy: { sort_order: 'asc' },
     }),
   ]);
@@ -244,11 +244,11 @@ router.get('/:id/menu', async (req: Request, res: Response) => {
 
   const [categories, items] = await Promise.all([
     prisma.menuCategory.findMany({
-      where: { cafe_id: cafe.id, is_active: 1 },
+      where: { cafe_id: cafe.id, is_active: true },
       orderBy: { sort_order: 'asc' },
     }),
     prisma.menuItem.findMany({
-      where: { cafe_id: cafe.id, is_available: 1 },
+      where: { cafe_id: cafe.id, is_available: true },
       orderBy: [{ is_popular: 'desc' }, { name: 'asc' }],
     }),
   ]);
@@ -355,7 +355,7 @@ router.get('/:id/tables', async (req: Request, res: Response) => {
 
     tables = tables.map((t) => ({
       ...t,
-      is_available: !bookedTableIds.has(t.id) ? 1 : 0,
+      is_available: !bookedTableIds.has(t.id),
     }));
   }
 

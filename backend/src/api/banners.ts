@@ -10,7 +10,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const { slider_type, cafeId } = req.query;
 
     const where: any = {
-      is_active: 1,
+      is_active: true,
     };
 
     if (slider_type && typeof slider_type === 'string') {
@@ -51,7 +51,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       badge: b.badge || undefined,
       bgImage: b.bg_image,
       cafeId: b.cafe_id || undefined,
-      isActive: b.is_active === 1,
+      isActive: b.is_active,
       sortOrder: b.sort_order,
       createdAt: b.created_at,
       updatedAt: b.updated_at,

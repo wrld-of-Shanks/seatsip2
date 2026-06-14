@@ -46,7 +46,7 @@ rewardsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
   if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
   const rewards = await prisma.reward.findMany({
-    where: { is_active: 1 },
+    where: { is_active: true },
     orderBy: { points_cost: 'asc' },
   });
 
@@ -96,7 +96,7 @@ rewardsRouter.post('/:id/redeem', async (req: AuthenticatedRequest, res: Respons
       where: { id: rewardId },
     });
 
-    if (!reward || reward.is_active === 0) {
+    if (!reward || !reward.is_active) {
       throw new Error('Reward not found');
     }
 
@@ -313,7 +313,7 @@ rewardsRouter.post('/purchase-tier', validate({ body: purchaseTierSchema }), asy
           type: 'PURCHASE',
           amount: amount,
           description: `${newTier.toUpperCase()} Membership Purchase (${paymentMethod})`,
-          balance_after: user.wallet_balance,
+          balance_after: Number(user.wallet_balance),
         },
       });
 

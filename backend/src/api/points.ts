@@ -198,7 +198,7 @@ pointsRouter.post('/redeem', validate({ body: redeemSchema }), async (req: Authe
 
   const result = await prisma.$transaction(async (tx) => {
     const reward = await tx.reward.findUnique({ where: { id: rewardId } });
-    if (!reward || reward.is_active === 0) throw new Error('Reward not found');
+    if (!reward || !reward.is_active) throw new Error('Reward not found');
     if (reward.stock === 0) throw new Error('Reward out of stock');
 
     const user = await tx.user.findUnique({ where: { id: userId } });
@@ -210,13 +210,13 @@ pointsRouter.post('/redeem', validate({ body: redeemSchema }), async (req: Authe
       throw new Error(`This reward requires ${reward.tier_required} tier`);
     }
 
-    // Check if subscribed for priority redemption (subscribers can redeem even if slightly below)
+    // Check if subscribed for priority redemption (subscribers can redeem with 10% fewer points)
     const isSubscribed = user.is_subscribed && user.subscription_expires_at && user.subscription_expires_at > new Date();
     if (user.loyalty_points < reward.points_cost && !isSubscribed) {
       throw new Error('Insufficient points');
     }
 
-    const actualCost = isSubscribed ? reward.points_cost : reward.points_cost;
+    const actualCost = isSubscribed ? Math.floor(reward.points_cost * 0.9) : reward.points_cost;
     if (user.loyalty_points < actualCost) {
       throw new Error('Insufficient points');
     }
@@ -299,7 +299,7 @@ pointsRouter.post('/convert-to-wallet', validate({ body: convertSchema }), async
     // Rate: ₹1 per 2 points (matching existing getPointsValue)
     const walletCredit = Math.floor(points / 2);
     const newPoints = user.loyalty_points - points;
-    const newWallet = user.wallet_balance + walletCredit;
+    const newWallet = Number(user.wallet_balance) + walletCredit;
 
     await tx.user.update({
       where: { id: userId },

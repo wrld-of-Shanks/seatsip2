@@ -37,7 +37,7 @@ offersRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
 
   const offers = await prisma.offer.findMany({
     where: {
-      is_active: 1,
+      is_active: true,
       valid_from: { lte: now },
       valid_until: { gte: now },
       ...(isSubscribed ? {} : { subscriber_only: false }),
@@ -100,7 +100,7 @@ offersRouter.post('/redeem', validate({ body: redeemOfferSchema }), async (req: 
   const result = await prisma.$transaction(async (tx) => {
     const offer = await tx.offer.findUnique({ where: { id: offerId } });
     if (!offer) throw new Error('Offer not found');
-    if (offer.is_active === 0) throw new Error('Offer is no longer active');
+    if (!offer.is_active) throw new Error('Offer is no longer active');
     if (offer.valid_from > new Date() || offer.valid_until < new Date()) throw new Error('Offer has expired');
     if (offer.max_redemptions > 0 && offer.times_redeemed >= offer.max_redemptions) throw new Error('Offer fully redeemed');
 
