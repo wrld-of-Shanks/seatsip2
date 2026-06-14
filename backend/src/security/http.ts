@@ -1,7 +1,6 @@
 import crypto from 'crypto';
 import cors from 'cors';
 import helmet from 'helmet';
-import morgan from 'morgan';
 import sanitizeHtml from 'sanitize-html';
 import { NextFunction, Request, Response } from 'express';
 import { z, ZodSchema } from 'zod';
@@ -23,14 +22,14 @@ export function validateCorsConfig(): void {
   if (process.env.NODE_ENV !== 'production') return;
   const origins = parseAllowedOrigins();
   if (origins.length === 0) {
-    console.error('FATAL: ALLOWED_ORIGINS (or CORS_ORIGIN) must list at least one origin in production (comma-separated).');
+    secureLogger.error('FATAL: ALLOWED_ORIGINS (or CORS_ORIGIN) must list at least one origin in production (comma-separated).');
     process.exit(1);
   }
   for (const o of origins) {
     try {
       new URL(o);
     } catch {
-      console.error(`FATAL: Invalid origin in ALLOWED_ORIGINS: ${o}`);
+      secureLogger.error(`FATAL: Invalid origin in ALLOWED_ORIGINS: ${o}`);
       process.exit(1);
     }
   }
@@ -91,20 +90,6 @@ export function requestId(req: Request, res: Response, next: NextFunction): void
   res.setHeader('X-API-Version', '2026-05-11');
   next();
 }
-
-export const safeMorgan = morgan((tokens, req, res) => {
-  return String(
-    redactSensitive(
-      [
-        (req as Request & { requestId?: string }).requestId,
-        tokens.method(req, res),
-        tokens.url(req, res),
-        tokens.status(req, res),
-        `${tokens['response-time'](req, res)}ms`,
-      ].join(' ')
-    )
-  );
-});
 
 function sanitizeValue(value: unknown): unknown {
   if (typeof value === 'string') {
@@ -173,10 +158,10 @@ export function audit(action: string, resourceType: string) {
             },
           })
           .catch((error) => {
-            console.error('audit log failed', error);
+            secureLogger.error('audit log failed', error);
           });
       } catch (error) {
-        console.error('audit handler failed', error);
+        secureLogger.error('audit handler failed', error);
       }
     });
     next();

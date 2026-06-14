@@ -1,3 +1,36 @@
+import pino from 'pino';
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+const logger = pino({
+  level: process.env.LOG_LEVEL || (isProduction ? 'info' : 'debug'),
+  ...(isProduction
+    ? {}
+    : {
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            colorize: true,
+            translateTime: 'SYS:standard',
+            ignore: 'pid,hostname',
+          },
+        },
+      }),
+  redact: {
+    paths: [
+      'req.headers.authorization',
+      'req.headers.cookie',
+      'req.body.password',
+      'req.body.cvv',
+      'req.body.cardNumber',
+      'req.body.number',
+      'req.body.accessToken',
+      'req.body.refreshToken',
+    ],
+    censor: '[REDACTED]',
+  },
+});
+
 export function redactSensitive(input: unknown): unknown {
   if (typeof input === 'string') {
     return input
@@ -24,9 +57,31 @@ export function redactSensitive(input: unknown): unknown {
   return input;
 }
 
-export const secureLogger = {
-  info: (...args: unknown[]) => console.info(...args.map(redactSensitive)),
-  warn: (...args: unknown[]) => console.warn(...args.map(redactSensitive)),
-  error: (...args: unknown[]) => console.error(...args.map(redactSensitive)),
-};
+function toPinoMerge(value: unknown): unknown {
+  if (value instanceof Error) return value;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return { detail: value };
+    }
+  }
+  return value;
+}
 
+export { logger as pinoLogger };
+
+export const secureLogger = {
+  info: (message: string, ...args: unknown[]) => {
+    const data = args.length > 0 ? redactSensitive(args[0]) : undefined;
+    data ? logger.info(toPinoMerge(data), message) : logger.info(message);
+  },
+  warn: (message: string, ...args: unknown[]) => {
+    const data = args.length > 0 ? redactSensitive(args[0]) : undefined;
+    data ? logger.warn(toPinoMerge(data), message) : logger.warn(message);
+  },
+  error: (message: string, ...args: unknown[]) => {
+    const data = args.length > 0 ? redactSensitive(args[0]) : undefined;
+    data ? logger.error(toPinoMerge(data), message) : logger.error(message);
+  },
+};
