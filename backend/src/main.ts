@@ -26,6 +26,25 @@ async function boot() {
     });
   }, PURGE_INTERVAL_MS);
 
+  // Subscription expiry check every 6 hours
+  const SUBSCRIPTION_EXPIRY_INTERVAL_MS = 6 * 60 * 60 * 1000;
+  async function expireStaleSubscriptions() {
+    try {
+      const now = new Date();
+      const result = await prisma.user.updateMany({
+        where: { is_subscribed: true, subscription_expires_at: { lt: now } },
+        data: { is_subscribed: false },
+      });
+      if (result.count > 0) {
+        secureLogger.info('Expired stale subscriptions', { count: result.count });
+      }
+    } catch (err) {
+      secureLogger.error('Subscription expiry cron failed', err);
+    }
+  }
+  void expireStaleSubscriptions();
+  setInterval(expireStaleSubscriptions, SUBSCRIPTION_EXPIRY_INTERVAL_MS);
+
   app.listen(PORT, () => {
     if (process.env.NODE_ENV === 'production') {
       secureLogger.info('SeatSip API listening', { port: PORT });

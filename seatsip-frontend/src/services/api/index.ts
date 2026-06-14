@@ -286,4 +286,19 @@ export const menuApi = {
   list: (params?: { cafeId?: string; exploreCategory?: string }) => api.get('/menu/items', { params }),
 };
 
+// ===== Subscriptions =====
+export const subscriptionsApi = {
+  status: () => api.get('/subscriptions/status'),
+  activate: (data: {
+    planType: 'MONTHLY' | 'YEARLY';
+    paymentMethod: 'WALLET' | 'RAZORPAY';
+    razorpay_payment_id?: string;
+    razorpay_order_id?: string;
+    razorpay_signature?: string;
+  }) => api.post('/subscriptions/activate', data),
+  cancel: () => api.post('/subscriptions/cancel'),
+  autoRenewCheck: () => api.post('/subscriptions/auto-renew-check'),
+  createOrder: (planType: 'MONTHLY' | 'YEARLY') => api.post('/subscriptions/create-order', { planType }),
+};
+
 export default api;
