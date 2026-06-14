@@ -14,11 +14,32 @@ router.post('/razorpay/webhook', express.raw({ type: 'application/json', limit: 
   const event = JSON.parse((req.body as Buffer).toString('utf8'));
   const payment = event.payload?.payment?.entity;
   const refund = event.payload?.refund?.entity;
+  const razorpayPaymentId = payment?.id || refund?.payment_id || null;
+
+  // Idempotency check: skip if this payment_id has already been processed
+  if (razorpayPaymentId) {
+    const existing = await prisma.idempotencyKey.findUnique({
+      where: { razorpay_payment_id: razorpayPaymentId },
+    });
+    if (existing) {
+      return res.json({ success: true, idempotent: true });
+    }
+  }
 
   const rawEventId = event.id || `${event.event}:${event.created_at}`;
 
-  try {
-    await prisma.paymentEvent.create({
+  await prisma.$transaction(async (tx) => {
+    if (razorpayPaymentId) {
+      await tx.idempotencyKey.create({
+        data: {
+          id: uuidv4(),
+          razorpay_payment_id: razorpayPaymentId,
+          raw_event_id: rawEventId,
+        },
+      });
+    }
+
+    await tx.paymentEvent.create({
       data: {
         id: uuidv4(),
         user_id: null,
@@ -26,17 +47,13 @@ router.post('/razorpay/webhook', express.raw({ type: 'application/json', limit: 
         event_type: event.event,
         payment_method: 'RAZORPAY',
         amount: (payment?.amount || refund?.amount || 0) / 100,
-        razorpay_payment_id: payment?.id || refund?.payment_id || null,
+        razorpay_payment_id: razorpayPaymentId,
         razorpay_refund_id: refund?.id || null,
         raw_event_id: rawEventId,
         status: payment?.status || refund?.status || 'RECEIVED',
       },
     });
-  } catch (error: any) {
-    if (error.code !== 'P2002') {
-      throw error;
-    }
-  }
+  });
 
   return res.json({ success: true });
 });
