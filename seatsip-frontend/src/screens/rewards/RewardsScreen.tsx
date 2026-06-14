@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,12 +9,15 @@ import {
   StatusBar,
   ImageBackground,
   Image,
+  Modal,
+  TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import Svg, { Path, Polygon, Circle } from 'react-native-svg';
 import { useNavigation } from '@react-navigation/native';
 import AppIcon from '../../components/ui/AppIcon';
 import { useAuth } from '../../context/AuthContext';
-import { usersApi } from '../../services/api';
+import { usersApi, rewardsApi } from '../../services/api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const BROWN = '#6D3914';
@@ -129,12 +132,16 @@ const HexIcon = ({ fill, stroke }: { fill: string; stroke: string }) => (
 );
 
 // ─── Tier Card ────────────────────────────────────────────────────────────────
-const TierCardItem = ({ tier, isCurrentTier }: { tier: typeof TIERS[0]; isCurrentTier: boolean }) => (
-  <View style={[
-    tierStyles.card,
-    { backgroundColor: tier.bg, shadowColor: tier.shadow },
-    isCurrentTier && { borderWidth: 2, borderColor: tier.hexStroke },
-  ]}>
+const TierCardItem = ({ tier, isCurrentTier, onPress }: { tier: typeof TIERS[0]; isCurrentTier: boolean; onPress: () => void }) => (
+  <TouchableOpacity
+    activeOpacity={0.85}
+    onPress={onPress}
+    style={[
+      tierStyles.card,
+      { backgroundColor: tier.bg, shadowColor: tier.shadow },
+      isCurrentTier && { borderWidth: 2, borderColor: tier.hexStroke },
+    ]}
+  >
     <View style={tierStyles.cardInner}>
       {/* Left: Icon + Info */}
       <View style={tierStyles.leftCol}>
@@ -165,7 +172,7 @@ const TierCardItem = ({ tier, isCurrentTier }: { tier: typeof TIERS[0]; isCurren
         ))}
       </ScrollView>
     </View>
-  </View>
+  </TouchableOpacity>
 );
 
 const tierStyles = StyleSheet.create({
@@ -288,10 +295,28 @@ export default function RewardsScreen() {
     return Math.min(1, Math.max(0, (points - MIN_POINTS) / span));
   }, [points]);
   const ptsToNext = Math.max(0, MAX_TIER_POINTS - points);
+  
   const [activity, setActivity] = useState<{ id: string; title: string; subtitle: string; amount: string }[]>([]);
+  
+  // Checkout & Payment State
+  const [selectedTier, setSelectedTier] = useState<typeof TIERS[0] | null>(null);
+  const [checkoutAmount, setCheckoutAmount] = useState<number>(0);
+  const [paymentMethod, setPaymentMethod] = useState<'CARD' | 'UPI'>('CARD');
+  
+  // Form fields
+  const [cardNumber, setCardNumber] = useState('');
+  const [cardExpiry, setCardExpiry] = useState('');
+  const [cardCvv, setCardCvv] = useState('');
+  const [cardName, setCardName] = useState('');
+  const [upiId, setUpiId] = useState('');
+  
+  // UI states
+  const [isPaying, setIsPaying] = useState(false);
+  const [paymentError, setPaymentError] = useState('');
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [successTierName, setSuccessTierName] = useState('');
 
-  useEffect(() => {
-    refreshUser();
+  const fetchActivity = useCallback(() => {
     usersApi
       .walletTransactions()
       .then((r) => {
@@ -309,7 +334,127 @@ export default function RewardsScreen() {
         );
       })
       .catch(() => setActivity([]));
-  }, [refreshUser]);
+  }, []);
+
+  useEffect(() => {
+    refreshUser();
+    fetchActivity();
+  }, [refreshUser, fetchActivity]);
+
+  const handleTierSelect = useCallback((tier: typeof TIERS[0]) => {
+    let minAmt = 99;
+    let maxAmt = 149;
+    if (tier.id === 'gold') {
+      minAmt = 199;
+      maxAmt = 299;
+    } else if (tier.id === 'platinum') {
+      minAmt = 399;
+      maxAmt = 499;
+    }
+    const randAmt = Math.floor(Math.random() * (maxAmt - minAmt + 1)) + minAmt;
+
+    setSelectedTier(tier);
+    setCheckoutAmount(randAmt);
+    setPaymentMethod('CARD');
+    setCardNumber('');
+    setCardExpiry('');
+    setCardCvv('');
+    setCardName('');
+    setUpiId('');
+    setPaymentError('');
+  }, []);
+
+  const formatCardNumber = (text: string) => {
+    const cleaned = text.replace(/\D/g, '');
+    const match = cleaned.match(/.{1,4}/g);
+    if (match) {
+      return match.join(' ');
+    }
+    return cleaned;
+  };
+
+  const handleCardNumberChange = (text: string) => {
+    const formatted = formatCardNumber(text);
+    setCardNumber(formatted.substring(0, 19)); // 16 digits + 3 spaces
+  };
+
+  const handleExpiryChange = (text: string) => {
+    const cleaned = text.replace(/\D/g, '');
+    if (cleaned.length >= 2) {
+      setCardExpiry(`${cleaned.slice(0, 2)}/${cleaned.slice(2, 4)}`);
+    } else {
+      setCardExpiry(cleaned);
+    }
+  };
+
+  const validateForm = (): boolean => {
+    if (paymentMethod === 'CARD') {
+      const cleanCard = cardNumber.replace(/\s+/g, '');
+      if (cleanCard.length !== 16 || isNaN(Number(cleanCard))) {
+        setPaymentError('Please enter a valid 16-digit card number');
+        return false;
+      }
+      if (!/^\d{2}\/\d{2}$/.test(cardExpiry)) {
+        setPaymentError('Expiry date must be MM/YY');
+        return false;
+      }
+      const [mm, yy] = cardExpiry.split('/');
+      const month = parseInt(mm, 10);
+      if (month < 1 || month > 12) {
+        setPaymentError('Expiry month must be between 01 and 12');
+        return false;
+      }
+      if (cardCvv.length !== 3 || isNaN(Number(cardCvv))) {
+        setPaymentError('CVV must be 3 digits');
+        return false;
+      }
+      if (cardName.trim().length < 3) {
+        setPaymentError('Please enter cardholder name');
+        return false;
+      }
+    } else {
+      if (!upiId.includes('@') || upiId.trim().length < 3) {
+        setPaymentError('Please enter a valid UPI ID (e.g. user@upi)');
+        return false;
+      }
+    }
+    setPaymentError('');
+    return true;
+  };
+
+  const handleCheckoutSubmit = async () => {
+    if (!selectedTier) return;
+    if (!validateForm()) return;
+
+    setIsPaying(true);
+    setPaymentError('');
+
+    try {
+      const response = await rewardsApi.purchaseTier({
+        tierId: selectedTier.id,
+        amount: checkoutAmount,
+        paymentMethod: paymentMethod,
+      });
+
+      if (response.data?.success) {
+        setIsPaying(false);
+        const tierName = selectedTier.name;
+        setSelectedTier(null);
+        setShowSuccess(true);
+        setSuccessTierName(tierName);
+
+        refreshUser();
+        fetchActivity();
+      } else {
+        setPaymentError(response.data?.message || 'Payment failed. Please try again.');
+        setIsPaying(false);
+      }
+    } catch (err: any) {
+      console.error('Tier purchase error:', err);
+      setPaymentError(err.response?.data?.message || err.message || 'Payment processing failed');
+      setIsPaying(false);
+    }
+  };
 
   return (
     <ImageBackground 
@@ -345,11 +490,8 @@ export default function RewardsScreen() {
             <TierCardItem
               key={tier.id}
               tier={tier}
-              isCurrentTier={
-                tier.id === 'platinum' ? points >= 4000 :
-                tier.id === 'gold' ? points >= 2000 :
-                true
-              }
+              isCurrentTier={user?.loyalty_tier?.toLowerCase() === tier.id}
+              onPress={() => handleTierSelect(tier)}
             />
           ))}
 
@@ -394,6 +536,207 @@ export default function RewardsScreen() {
 
           <View style={{ height: 24 }} />
         </ScrollView>
+
+        {/* ── Checkout Modal ── */}
+        <Modal
+          visible={selectedTier !== null}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setSelectedTier(null)}
+        >
+          <View style={modalStyles.overlay}>
+            <TouchableOpacity 
+              style={modalStyles.overlayClose} 
+              activeOpacity={1} 
+              onPress={() => setSelectedTier(null)} 
+            />
+            <View style={modalStyles.sheet}>
+              {/* Header */}
+              <View style={modalStyles.header}>
+                <Text style={modalStyles.headerTitle}>Membership Checkout</Text>
+                <TouchableOpacity onPress={() => setSelectedTier(null)} style={modalStyles.closeBtn}>
+                  <AppIcon name="close" size={16} color="#6D3914" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Selected Tier info summary */}
+              {selectedTier && (
+                <View style={[modalStyles.tierSummary, { backgroundColor: selectedTier.bg }]}>
+                  <HexIcon fill={selectedTier.hexFill} stroke={selectedTier.hexStroke} />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={[modalStyles.summaryName, { color: selectedTier.text }]}>
+                      {selectedTier.name} MEMBERSHIP
+                    </Text>
+                    <Text style={[modalStyles.summaryDesc, { color: selectedTier.subtext }]}>
+                      {selectedTier.description}
+                    </Text>
+                  </View>
+                  <View style={modalStyles.badgeContainer}>
+                    <Text style={modalStyles.amountLabel}>Price</Text>
+                    <Text style={modalStyles.amountText}>₹{checkoutAmount}</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Selector for card / upi */}
+              <Text style={modalStyles.sectionLabel}>Select Payment Method</Text>
+              <View style={modalStyles.methodSelector}>
+                <TouchableOpacity
+                  style={[
+                    modalStyles.methodBtn,
+                    paymentMethod === 'CARD' && modalStyles.methodBtnActive,
+                  ]}
+                  onPress={() => {
+                    setPaymentMethod('CARD');
+                    setPaymentError('');
+                  }}
+                >
+                  <AppIcon name="card" size={18} color={paymentMethod === 'CARD' ? '#FFF' : '#6D3914'} />
+                  <Text style={[
+                    modalStyles.methodBtnText,
+                    paymentMethod === 'CARD' && modalStyles.methodBtnTextActive,
+                  ]}>Card</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    modalStyles.methodBtn,
+                    paymentMethod === 'UPI' && modalStyles.methodBtnActive,
+                  ]}
+                  onPress={() => {
+                    setPaymentMethod('UPI');
+                    setPaymentError('');
+                  }}
+                >
+                  <AppIcon name="zap" size={18} color={paymentMethod === 'UPI' ? '#FFF' : '#6D3914'} />
+                  <Text style={[
+                    modalStyles.methodBtnText,
+                    paymentMethod === 'UPI' && modalStyles.methodBtnTextActive,
+                  ]}>UPI ID</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Form Fields */}
+              <View style={modalStyles.formContainer}>
+                {paymentMethod === 'CARD' ? (
+                  <View style={modalStyles.cardFields}>
+                    <View style={modalStyles.inputContainer}>
+                      <Text style={modalStyles.inputLabel}>Card Number</Text>
+                      <TextInput
+                        style={modalStyles.input}
+                        placeholder="XXXX XXXX XXXX XXXX"
+                        placeholderTextColor="#A99B90"
+                        keyboardType="numeric"
+                        value={cardNumber}
+                        onChangeText={handleCardNumberChange}
+                        maxLength={19}
+                      />
+                    </View>
+                    <View style={modalStyles.rowFields}>
+                      <View style={[modalStyles.inputContainer, { flex: 1, marginRight: 12 }]}>
+                        <Text style={modalStyles.inputLabel}>Expiry (MM/YY)</Text>
+                        <TextInput
+                          style={modalStyles.input}
+                          placeholder="MM/YY"
+                          placeholderTextColor="#A99B90"
+                          keyboardType="numeric"
+                          value={cardExpiry}
+                          onChangeText={handleExpiryChange}
+                          maxLength={5}
+                        />
+                      </View>
+                      <View style={[modalStyles.inputContainer, { flex: 1 }]}>
+                        <Text style={modalStyles.inputLabel}>CVV</Text>
+                        <TextInput
+                          style={modalStyles.input}
+                          placeholder="123"
+                          placeholderTextColor="#A99B90"
+                          keyboardType="numeric"
+                          secureTextEntry
+                          value={cardCvv}
+                          onChangeText={(text) => setCardCvv(text.replace(/\D/g, '').substring(0, 3))}
+                          maxLength={3}
+                        />
+                      </View>
+                    </View>
+                    <View style={modalStyles.inputContainer}>
+                      <Text style={modalStyles.inputLabel}>Cardholder Name</Text>
+                      <TextInput
+                        style={modalStyles.input}
+                        placeholder="e.g. John Doe"
+                        placeholderTextColor="#A99B90"
+                        value={cardName}
+                        onChangeText={setCardName}
+                      />
+                    </View>
+                  </View>
+                ) : (
+                  <View style={modalStyles.upiFields}>
+                    <View style={modalStyles.inputContainer}>
+                      <Text style={modalStyles.inputLabel}>UPI ID</Text>
+                      <TextInput
+                        style={modalStyles.input}
+                        placeholder="username@bank"
+                        placeholderTextColor="#A99B90"
+                        autoCapitalize="none"
+                        value={upiId}
+                        onChangeText={(text) => setUpiId(text.trim())}
+                      />
+                    </View>
+                  </View>
+                )}
+              </View>
+
+              {/* Error Message */}
+              {paymentError ? (
+                <Text style={modalStyles.errorText}>{paymentError}</Text>
+              ) : null}
+
+              {/* Action Buttons */}
+              <TouchableOpacity
+                style={modalStyles.payBtn}
+                activeOpacity={0.9}
+                onPress={handleCheckoutSubmit}
+                disabled={isPaying}
+              >
+                {isPaying ? (
+                  <ActivityIndicator color="#FFF" size="small" />
+                ) : (
+                  <Text style={modalStyles.payBtnText}>
+                    Pay ₹{checkoutAmount}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        {/* ── Success Modal ── */}
+        <Modal
+          visible={showSuccess}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowSuccess(false)}
+        >
+          <View style={modalStyles.successOverlay}>
+            <View style={modalStyles.successCard}>
+              <View style={modalStyles.successBadge}>
+                <AppIcon name="check" size={36} color="#FFF" />
+              </View>
+              <Text style={modalStyles.successTitle}>Payment Successful!</Text>
+              <Text style={modalStyles.successSubtitle}>
+                Welcome to the premium {successTierName} Tier membership group. Your benefits are now active.
+              </Text>
+              <TouchableOpacity
+                style={modalStyles.successBtn}
+                activeOpacity={0.9}
+                onPress={() => setShowSuccess(false)}
+              >
+                <Text style={modalStyles.successBtnText}>Great!</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </ImageBackground>
   );
@@ -705,5 +1048,234 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFFFFF',
     letterSpacing: 0.2,
+  },
+});
+
+const modalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(57, 29, 14, 0.6)',
+    justifyContent: 'flex-end',
+  },
+  overlayClose: {
+    flex: 1,
+  },
+  sheet: {
+    backgroundColor: '#FAF3E8',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    paddingTop: 20,
+    shadowColor: '#3F1D0E',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#3F1D0E',
+    letterSpacing: -0.3,
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(109, 57, 20, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tierSummary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  summaryName: {
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  summaryDesc: {
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  badgeContainer: {
+    alignItems: 'flex-end',
+    marginLeft: 10,
+  },
+  amountLabel: {
+    fontSize: 9,
+    color: 'rgba(63,29,14,0.6)',
+    textTransform: 'uppercase',
+    fontWeight: '700',
+  },
+  amountText: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#3F1D0E',
+  },
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#6D3914',
+    marginBottom: 10,
+  },
+  methodSelector: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 20,
+  },
+  methodBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#6D3914',
+    backgroundColor: 'transparent',
+  },
+  methodBtnActive: {
+    backgroundColor: '#6D3914',
+  },
+  methodBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#6D3914',
+  },
+  methodBtnTextActive: {
+    color: '#FFF',
+  },
+  formContainer: {
+    marginBottom: 20,
+  },
+  cardFields: {
+    gap: 12,
+  },
+  upiFields: {
+    gap: 12,
+  },
+  inputContainer: {
+    marginBottom: 2,
+  },
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6D3914',
+    marginBottom: 6,
+  },
+  input: {
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E4CDB0',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#3F1D0E',
+  },
+  rowFields: {
+    flexDirection: 'row',
+  },
+  errorText: {
+    color: '#D32F2F',
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  payBtn: {
+    backgroundColor: '#6D3914',
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#6D3914',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  payBtnText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  successOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(57, 29, 14, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  successCard: {
+    backgroundColor: '#FAF3E8',
+    borderRadius: 24,
+    padding: 30,
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 340,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  successBadge: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#4CAF50',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+    shadowColor: '#4CAF50',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  successTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#3F1D0E',
+    marginBottom: 12,
+  },
+  successSubtitle: {
+    fontSize: 14,
+    color: '#6D3914',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+  successBtn: {
+    backgroundColor: '#6D3914',
+    borderRadius: 50,
+    paddingVertical: 14,
+    paddingHorizontal: 40,
+    alignItems: 'center',
+  },
+  successBtnText: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });

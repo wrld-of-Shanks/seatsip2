@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Layout from '@/components/layout/Layout';
 import { api } from '@/services/api';
 import { Sidebar } from '@/components/ui/Sidebar';
-import { Plus, Edit, Trash2, Megaphone, Building2, ChevronDown, ImageIcon, User, Clock } from 'lucide-react';
+import { Plus, Edit, Trash2, Megaphone, Building2, ChevronDown, ImageIcon, User, Clock, Compass } from 'lucide-react';
 
 export default function BannersPage() {
   const [banners, setBanners] = useState<any[]>([]);
@@ -14,6 +14,7 @@ export default function BannersPage() {
   const [editingBanner, setEditingBanner] = useState<any>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [userRole, setUserRole] = useState<string | null>(null);
+  const [exploreCategories, setExploreCategories] = useState<any[]>([]);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -41,6 +42,7 @@ export default function BannersPage() {
     linkUrl: '',
     buttonText: 'View',
     cafeId: '',
+    exploreCategory: '',
     isActive: true,
     sortOrder: '0',
   });
@@ -50,7 +52,19 @@ export default function BannersPage() {
     setUserRole(role);
     loadBanners();
     loadCafes(role);
+    loadExploreCategories();
   }, []);
+
+  async function loadExploreCategories() {
+    try {
+      const res = await api.exploreCategories.list();
+      if (res.success) {
+        setExploreCategories(res.data);
+      }
+    } catch (err) {
+      console.error('Failed to load explore categories:', err);
+    }
+  }
 
   async function loadBanners() {
     try {
@@ -110,6 +124,7 @@ export default function BannersPage() {
       linkUrl: '',
       buttonText: 'View',
       cafeId: userRole === 'CAFE_OWNER' && cafes.length > 0 ? cafes[0].id : '',
+      exploreCategory: '',
       isActive: true,
       sortOrder: '0',
     });
@@ -157,6 +172,7 @@ export default function BannersPage() {
       linkUrl: banner.linkUrl || '',
       buttonText: banner.buttonText || banner.ctaText || 'View',
       cafeId: banner.cafeId || '',
+      exploreCategory: banner.exploreCategory || banner.explore_category || '',
       isActive: banner.isActive !== false,
       sortOrder: String(banner.sortOrder || 0),
     });
@@ -493,6 +509,24 @@ export default function BannersPage() {
                 <option value="banner">Make full banner clickable</option>
                 <option value="button">Show a button on banner</option>
               </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-black text-stone-400 uppercase tracking-[0.2em] mb-2">Explore Category (Optional)</label>
+              <div className="relative">
+                <Compass className="absolute left-4 top-4 text-stone-300 pointer-events-none" size={16} />
+                <select
+                  value={formData.exploreCategory}
+                  onChange={(e) => setFormData({ ...formData, exploreCategory: e.target.value })}
+                  className="w-full rounded-xl border border-stone-100 bg-stone-50 pl-10 pr-4 py-3 font-bold text-stone-800 outline-none appearance-none cursor-pointer"
+                >
+                  <option value="">None (Not in Explore Screen)</option>
+                  {exploreCategories.map(cat => (
+                    <option key={cat.id} value={cat.slug}>{cat.name}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-4 top-4 text-stone-300 pointer-events-none" size={16} />
+              </div>
             </div>
 
             {formData.clickAction !== 'none' && (

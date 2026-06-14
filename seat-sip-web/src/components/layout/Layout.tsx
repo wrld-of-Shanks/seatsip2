@@ -24,7 +24,8 @@ import {
   Shield,
   User,
   Megaphone,
-  Gift
+  Gift,
+  Compass
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -52,7 +53,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     if (pathname.startsWith('/owner')) return ['CAFE_OWNER'];
     if (pathname.startsWith('/admin')) return ['ADMIN'];
     if (pathname === '/banners') return ['ADMIN'];
-    if (['/cafe-owners', '/users', '/settings', '/permissions', '/audit-logs'].includes(pathname)) return ['ADMIN'];
+    if (['/cafe-owners', '/users', '/settings', '/permissions', '/audit-logs', '/explore'].includes(pathname)) return ['ADMIN'];
     return ['ADMIN', 'CAFE_OWNER'];
   }, [pathname]);
 
@@ -158,6 +159,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <>
               <SidebarItem icon={User} label="Pending Owners" href="/cafe-owners" active={pathname === '/cafe-owners'} collapsed={sidebarCollapsed} />
               <SidebarItem icon={Building2} label="Cafes" href="/cafes" active={pathname === '/cafes'} collapsed={sidebarCollapsed} />
+              <SidebarItem icon={Compass} label="Explore" href="/explore" active={pathname === '/explore'} collapsed={sidebarCollapsed} />
               <SidebarItem icon={Gift} label="Rewards" href="/admin/rewards" active={pathname === '/rewards' || pathname === '/admin/rewards'} collapsed={sidebarCollapsed} />
               {isAdmin && <SidebarItem icon={Megaphone} label="Banners" href="/admin/banners" active={pathname === '/banners' || pathname === '/admin/banners'} collapsed={sidebarCollapsed} />}
               <SidebarItem icon={BarChart3} label="Analytics" href="/analytics" active={pathname === '/analytics'} collapsed={sidebarCollapsed} />

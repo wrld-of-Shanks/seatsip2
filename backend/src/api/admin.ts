@@ -268,6 +268,7 @@ router.post('/cafes', managerOnly, audit('CREATE_CAFE', 'cafe'), async (req: Aut
       discount,
       reservationSlots,
       reservation_slots,
+      priority,
     } = req.body;
 
     const generatedSlug = slug || name.toLowerCase().replace(/ /g, '-').replace(/[^\w-]+/g, '');
@@ -336,6 +337,7 @@ router.post('/cafes', managerOnly, audit('CREATE_CAFE', 'cafe'), async (req: Aut
         cover_color: coverColor || null,
         discount: discount || null,
         reservation_slots: finalSlots,
+        priority: priority !== undefined ? parseInt(priority as string) : 0,
       },
     });
 
@@ -423,6 +425,7 @@ router.patch('/cafes/:id', managerOnly, audit('UPDATE_CAFE', 'cafe'), async (req
       reviewCount,
       reservationSlots,
       reservation_slots,
+      priority,
       ...rest
     } = req.body;
     
@@ -455,6 +458,7 @@ router.patch('/cafes/:id', managerOnly, audit('UPDATE_CAFE', 'cafe'), async (req
     else if (upiId !== undefined) updateData.upi_id = upiId || null;
 
     if (rating !== undefined) updateData.rating = parseFloat(rating as string);
+    if (priority !== undefined) updateData.priority = parseInt(priority as string) || 0;
 
     if (req.user.role === 'ADMIN') {
       if (owner_id !== undefined) updateData.owner_id = owner_id || null;
@@ -1013,11 +1017,11 @@ router.patch('/users/:id/status', adminOnly, audit('CHANGE_STATUS', 'user'), asy
 });
 
 /**
- * @route GET /api/v1/admin/cafe-owners
- * @description List all cafe owners
+ * @route GET /api/v1/admin/cafe-owners/pending
+ * @description List all pending cafe owners
  * @access Admin only
  */
-router.get('/cafe-owners', adminOnly, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.get('/cafe-owners/pending', adminOnly, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const owners = await prisma.user.findMany({
       where: {
@@ -1543,7 +1547,14 @@ router.post('/menu/items', managerOnly, audit('CREATE_MENU_ITEM', 'menu'), async
       customizations,
       tags,
       caffeine,
+      exploreCategory,
+      explore_category,
     } = req.body;
+
+    const finalExploreCategory = exploreCategory || explore_category;
+    if (!finalExploreCategory) {
+      return res.status(400).json({ success: false, message: 'Explore category is compulsory' });
+    }
 
     // Ownership check
     if (req.user.role === 'CAFE_OWNER') {
@@ -1599,6 +1610,7 @@ router.post('/menu/items', managerOnly, audit('CREATE_MENU_ITEM', 'menu'), async
         allergens: allergens ? (typeof allergens === 'string' ? allergens : JSON.stringify(allergens)) : '[]',
         customizations: customizations ? (typeof customizations === 'string' ? customizations : JSON.stringify(customizations)) : '[]',
         tags: tags ? (Array.isArray(tags) ? JSON.stringify(tags) : (typeof tags === 'string' ? JSON.stringify(tags.split(',').map(t => t.trim()).filter(Boolean)) : '[]')) : '[]',
+        explore_category: finalExploreCategory,
       }
     });
 
@@ -1612,6 +1624,7 @@ router.post('/menu/items', managerOnly, audit('CREATE_MENU_ITEM', 'menu'), async
       caffeine: item.caffeine,
       tags: item.tags ? (typeof item.tags === 'string' ? JSON.parse(item.tags) : item.tags) : [],
       price: item.price * 100, // Return in subunits (cents/paise) for Next.js web admin
+      exploreCategory: item.explore_category || undefined,
     };
 
     return res.status(201).json({ success: true, data: mappedItem });
@@ -1671,6 +1684,8 @@ router.patch('/menu/items/:id', managerOnly, audit('UPDATE_MENU_ITEM', 'menu'), 
       cafe_id,
       cafe,
       cart_items,
+      exploreCategory,
+      explore_category,
       ...rest
     } = req.body;
 
@@ -1742,6 +1757,14 @@ router.patch('/menu/items/:id', managerOnly, audit('UPDATE_MENU_ITEM', 'menu'), 
     if (cafe_id !== undefined) updateData.cafe_id = cafe_id;
     else if (cafeId !== undefined) updateData.cafe_id = cafeId;
 
+    const finalExploreCategory = exploreCategory !== undefined ? exploreCategory : explore_category;
+    if (finalExploreCategory !== undefined) {
+      if (!finalExploreCategory) {
+        return res.status(400).json({ success: false, message: 'Explore category is compulsory' });
+      }
+      updateData.explore_category = finalExploreCategory;
+    }
+
     const item = await prisma.menuItem.update({
       where: { id },
       data: updateData,
@@ -1767,6 +1790,7 @@ router.patch('/menu/items/:id', managerOnly, audit('UPDATE_MENU_ITEM', 'menu'), 
       customizations: item.customizations,
       tags: item.tags ? (typeof item.tags === 'string' ? JSON.parse(item.tags) : item.tags) : [],
       price: item.price * 100, // Return in subunits (cents/paise)
+      exploreCategory: item.explore_category || undefined,
     };
 
     return res.status(200).json({ success: true, data: mappedItem });
@@ -3272,12 +3296,16 @@ router.get('/menu/items', requireAdminOrOwner, async (req: AuthenticatedRequest,
       cafeName: i.cafe?.name,
       categoryId: i.category_id,
       categoryName: i.category?.name,
+      exploreCategory: i.explore_category || undefined,
     })),
   });
 });
 
 router.post('/menu/items', requireAdminOrOwner, async (req: AuthenticatedRequest, res: Response) => {
   const body = req.body as any;
+  if (!body.exploreCategory) {
+    return res.status(400).json({ success: false, message: 'Explore category is compulsory' });
+  }
   const item = await prisma.menuItem.create({
     data: {
       id: uuidv4(),
@@ -3293,6 +3321,7 @@ router.post('/menu/items', requireAdminOrOwner, async (req: AuthenticatedRequest
       stock_quantity: parseInt(String(body.stockQuantity || 999), 10),
       prep_time_minutes: parseInt(String(body.prepTimeMinutes || 10), 10),
       calories: body.calories ? parseInt(String(body.calories), 10) : null,
+      explore_category: body.exploreCategory,
     },
   });
   return res.status(201).json({ success: true, data: { id: item.id } });
@@ -3312,6 +3341,13 @@ router.patch('/menu/items/:id', requireAdminOrOwner, async (req: AuthenticatedRe
   if (body.prepTimeMinutes !== undefined) updateData.prep_time_minutes = parseInt(String(body.prepTimeMinutes), 10);
   if (body.calories !== undefined) updateData.calories = body.calories ? parseInt(String(body.calories), 10) : null;
   if (body.categoryId !== undefined) updateData.category_id = body.categoryId || null;
+  
+  if (body.exploreCategory !== undefined) {
+    if (!body.exploreCategory) {
+      return res.status(400).json({ success: false, message: 'Explore category is compulsory' });
+    }
+    updateData.explore_category = body.exploreCategory;
+  }
 
   await prisma.menuItem.update({ where: { id: req.params.id }, data: updateData });
   return res.json({ success: true, message: 'Menu item updated' });
@@ -3360,6 +3396,7 @@ function mapBanner(b: any) {
     badge: b.badge,
     bgImage: b.bg_image,
     cafeId: b.cafe_id,
+    exploreCategory: b.explore_category || undefined,
     isActive: b.is_active === 1,
     sortOrder: b.sort_order,
     createdAt: b.created_at,
@@ -3397,6 +3434,7 @@ router.post('/banners', requireAdmin, async (req: AuthenticatedRequest, res: Res
       badge: body.badge || '',
       bg_image: body.bgImage || '',
       cafe_id: body.cafeId || null,
+      explore_category: body.exploreCategory || null,
       is_active: body.isActive !== false ? 1 : 0,
       sort_order: parseInt(String(body.sortOrder || 0), 10),
     },
@@ -3428,6 +3466,7 @@ router.patch('/banners/:id', requireAdmin, async (req: AuthenticatedRequest, res
   if (body.badge !== undefined) updateData.badge = body.badge;
   if (body.bgImage !== undefined) updateData.bg_image = body.bgImage;
   if (body.cafeId !== undefined) updateData.cafe_id = body.cafeId || null;
+  if (body.exploreCategory !== undefined) updateData.explore_category = body.exploreCategory || null;
   if (body.isActive !== undefined) updateData.is_active = body.isActive ? 1 : 0;
   if (body.sortOrder !== undefined) updateData.sort_order = parseInt(String(body.sortOrder), 10);
 
@@ -3525,6 +3564,137 @@ router.get('/rewards/redemptions', requireAdminOrOwner, async (_req: Authenticat
     take: 100,
   });
   return res.json({ success: true, data: redemptions });
+});
+
+// ─────────────────────────────────────────────────────────────
+// EXPLORE CATEGORIES (Admin CRUD)
+// ─────────────────────────────────────────────────────────────
+
+router.get('/explore-categories', requireAdminOrOwner, async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const categories = await prisma.exploreCategory.findMany({
+      orderBy: { sort_order: 'asc' },
+    });
+    return res.json({
+      success: true,
+      data: categories.map(cat => ({
+        id: cat.id,
+        name: cat.name,
+        slug: cat.slug,
+        description: cat.description,
+        tag: cat.tag,
+        tagColor: cat.tag_color,
+        tagBg: cat.tag_bg,
+        imageUrl: cat.image_url,
+        sortOrder: cat.sort_order,
+        createdAt: cat.created_at,
+        updatedAt: cat.updated_at,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/explore-categories', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body as any;
+    const name = body.name?.trim();
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'Category name is required' });
+    }
+
+    const slug = body.slug?.trim() || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+
+    // Check uniqueness
+    const existing = await prisma.exploreCategory.findFirst({
+      where: { OR: [{ name }, { slug }] },
+    });
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'Category with this name or slug already exists' });
+    }
+
+    const category = await prisma.exploreCategory.create({
+      data: {
+        id: uuidv4(),
+        name,
+        slug,
+        description: body.description || null,
+        tag: body.tag || null,
+        tag_color: body.tagColor || '#FFFFFF',
+        tag_bg: body.tagBg || 'rgba(45,106,79,0.2)',
+        image_url: body.imageUrl || null,
+        sort_order: parseInt(String(body.sortOrder || 0), 10),
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: {
+        id: category.id,
+        name: category.name,
+        slug: category.slug,
+        description: category.description,
+        tag: category.tag,
+        tagColor: category.tag_color,
+        tagBg: category.tag_bg,
+        imageUrl: category.image_url,
+        sortOrder: category.sort_order,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/explore-categories/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const body = req.body as any;
+    const updateData: any = {};
+    if (body.name !== undefined) {
+      updateData.name = body.name.trim();
+      updateData.slug = body.slug?.trim() || body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    } else if (body.slug !== undefined) {
+      updateData.slug = body.slug.trim();
+    }
+    if (body.description !== undefined) updateData.description = body.description || null;
+    if (body.tag !== undefined) updateData.tag = body.tag || null;
+    if (body.tagColor !== undefined) updateData.tag_color = body.tagColor;
+    if (body.tagBg !== undefined) updateData.tag_bg = body.tagBg;
+    if (body.imageUrl !== undefined) updateData.image_url = body.imageUrl || null;
+    if (body.sortOrder !== undefined) updateData.sort_order = parseInt(String(body.sortOrder), 10);
+
+    const category = await prisma.exploreCategory.update({
+      where: { id: req.params.id },
+      data: updateData,
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        id: category.id,
+        name: category.name,
+        slug: category.slug,
+        description: category.description,
+        tag: category.tag,
+        tagColor: category.tag_color,
+        tagBg: category.tag_bg,
+        imageUrl: category.image_url,
+        sortOrder: category.sort_order,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/explore-categories/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    await prisma.exploreCategory.delete({ where: { id: req.params.id } });
+    return res.json({ success: true, message: 'Explore category deleted' });
+  } catch (error) {
+    next(error);
+  }
 });
 
 export default router;

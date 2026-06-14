@@ -200,6 +200,7 @@ model Cafe {
   // Operations
   is_open          Int      @default(1)
   is_active        Int      @default(1)
+  priority         Int      @default(0)
   open_time        String   @default("08:00")
   close_time       String   @default("22:00")
   prep_time_minutes Int     @default(15)

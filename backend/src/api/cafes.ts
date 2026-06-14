@@ -10,6 +10,18 @@ const router = Router();
 
 const DEFAULT_SLOT_MINUTES = 90;
 
+function getDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Radius of earth in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 function timeToMinutes(t: string): number {
   const parts = String(t || '')
     .trim()
@@ -35,7 +47,7 @@ function cafeWhereByIdOrSlug(idOrSlug: string): Prisma.CafeWhereInput {
 
 // GET /cafes - list cafes with filters
 router.get('/', async (req: Request, res: Response) => {
-  const { city, mood, search, sort = 'rating', limit = '20', offset = '0' } = req.query as Record<string, string>;
+  const { city, mood, search, sort = 'rating', limit = '20', offset = '0', lat, lng } = req.query as Record<string, string>;
 
   const where: Prisma.CafeWhereInput = { is_active: 1 };
   if (city) where.city = { contains: city };
@@ -48,23 +60,50 @@ router.get('/', async (req: Request, res: Response) => {
     ];
   }
 
-  const orderBy: Prisma.CafeOrderByWithRelationInput =
-    sort === 'name' ? { name: 'asc' } : sort === 'price' ? { price_level: 'asc' } : { rating: 'desc' };
+  let cafes = [];
+  let total = 0;
 
-  const take = parseInt(limit, 10);
-  const skip = parseInt(offset, 10);
+  if (lat && lng && sort === 'distance') {
+    const allCafes = await prisma.cafe.findMany({ where });
+    total = allCafes.length;
+    
+    const parsedLat = parseFloat(lat);
+    const parsedLng = parseFloat(lng);
+    
+    const cafesWithDistance = allCafes.map((c) => {
+      const dist = getDistance(parsedLat, parsedLng, c.latitude || 0, c.longitude || 0);
+      return { ...c, distanceValue: dist };
+    });
+    
+    cafesWithDistance.sort((a, b) => {
+      if ((b.priority || 0) !== (a.priority || 0)) {
+        return (b.priority || 0) - (a.priority || 0);
+      }
+      return a.distanceValue - b.distanceValue;
+    });
 
-  const [cafes, total] = await Promise.all([
-    prisma.cafe.findMany({ where, orderBy, take, skip }),
-    prisma.cafe.count({ where }),
-  ]);
+    const take = parseInt(limit, 10);
+    const skip = parseInt(offset, 10);
+    cafes = cafesWithDistance.slice(skip, skip + take);
+  } else {
+    const orderBy: Prisma.CafeOrderByWithRelationInput[] = [
+      { priority: 'desc' },
+      sort === 'name' ? { name: 'asc' } : sort === 'price' ? { price_level: 'asc' } : { rating: 'desc' }
+    ];
+    const take = parseInt(limit, 10);
+    const skip = parseInt(offset, 10);
+    [cafes, total] = await Promise.all([
+      prisma.cafe.findMany({ where, orderBy, take, skip }),
+      prisma.cafe.count({ where }),
+    ]);
+  }
 
-  return res.json({ success: true, data: cafes, meta: { total, limit: take, offset: skip } });
+  return res.json({ success: true, data: cafes, meta: { total, limit: parseInt(limit, 10), offset: parseInt(offset, 10) } });
 });
 
 // GET /cafes/popular-items - list popular items from all cafes
 router.get('/popular-items', async (req: Request, res: Response) => {
-  const { limit = '20' } = req.query as Record<string, string>;
+  const { limit = '20', lat, lng, sort } = req.query as Record<string, string>;
 
   const items = await prisma.menuItem.findMany({
     where: { 
@@ -73,13 +112,42 @@ router.get('/popular-items', async (req: Request, res: Response) => {
       cafe: { is_active: 1 }
     },
     include: {
-      cafe: { select: { name: true, id: true } }
+      cafe: { select: { name: true, id: true, latitude: true, longitude: true, rating: true, review_count: true, priority: true } }
     },
-    take: parseInt(limit, 10),
-    orderBy: { created_at: 'desc' },
   });
 
-  const formattedItems = items.map(item => ({
+  let sortedItems = [...items];
+
+  if (lat && lng && sort === 'distance') {
+    const parsedLat = parseFloat(lat);
+    const parsedLng = parseFloat(lng);
+    const itemsWithDist = items.map(item => {
+      const dist = getDistance(parsedLat, parsedLng, item.cafe.latitude || 0, item.cafe.longitude || 0);
+      return { ...item, distance: dist };
+    });
+
+    itemsWithDist.sort((a, b) => {
+      if ((b.cafe.priority || 0) !== (a.cafe.priority || 0)) {
+        return (b.cafe.priority || 0) - (a.cafe.priority || 0);
+      }
+      return a.distance - b.distance;
+    });
+    sortedItems = itemsWithDist;
+  } else {
+    sortedItems.sort((a, b) => {
+      if ((b.cafe.priority || 0) !== (a.cafe.priority || 0)) {
+        return (b.cafe.priority || 0) - (a.cafe.priority || 0);
+      }
+      const ratingDiff = (b.cafe.rating || 0) - (a.cafe.rating || 0);
+      if (ratingDiff !== 0) return ratingDiff;
+      return (b.cafe.review_count || 0) - (a.cafe.review_count || 0);
+    });
+  }
+
+  const take = parseInt(limit, 10);
+  const resultSlice = sortedItems.slice(0, take);
+
+  const formattedItems = resultSlice.map(item => ({
     ...item,
     cafe_name: item.cafe.name,
     cafe_id: item.cafe.id,

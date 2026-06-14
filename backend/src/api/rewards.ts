@@ -254,4 +254,86 @@ rewardsRouter.post('/earn', validate({ body: earnActionSchema }), async (req: Au
   });
 });
 
+const purchaseTierSchema = z.object({
+  tierId: z.enum(['platinum', 'gold', 'silver']),
+  amount: z.number().positive(),
+  paymentMethod: z.enum(['CARD', 'UPI']),
+});
+
+rewardsRouter.post('/purchase-tier', validate({ body: purchaseTierSchema }), async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user?.userId;
+  const { tierId, amount, paymentMethod } = req.body;
+
+  if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+  const pointsForTier: Record<string, number> = {
+    silver: 100,
+    gold: 2000,
+    platinum: 4000,
+  };
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+      });
+
+      if (!user) throw new Error('User not found');
+
+      const prevTier = user.loyalty_tier.toLowerCase();
+      const newTier = tierId;
+      const newPoints = Math.max(user.loyalty_points, pointsForTier[tierId]);
+
+      // 1. Update user tier and points
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: {
+          loyalty_tier: newTier,
+          loyalty_points: newPoints,
+        },
+      });
+
+      // 2. Create a tier upgrade history
+      await tx.loyaltyTierHistory.create({
+        data: {
+          id: uuidv4(),
+          user_id: userId,
+          from_tier: prevTier,
+          to_tier: newTier,
+          points_at: newPoints,
+          reason: `Purchased ${newTier.toUpperCase()} membership via ${paymentMethod}`,
+        },
+      });
+
+      // 3. Create a mock wallet transaction for the payment visualization
+      await tx.walletTransaction.create({
+        data: {
+          id: uuidv4(),
+          user_id: userId,
+          type: 'PURCHASE',
+          amount: amount,
+          description: `${newTier.toUpperCase()} Membership Purchase (${paymentMethod})`,
+          balance_after: user.wallet_balance,
+        },
+      });
+
+      return updatedUser;
+    });
+
+    return res.json({
+      success: true,
+      message: `Successfully purchased ${tierId.toUpperCase()} membership!`,
+      user: {
+        points: result.loyalty_points,
+        tier: result.loyalty_tier,
+        pointsValue: getPointsValue(result.loyalty_points),
+        pointsToNextTier: getPointsToNextTier(result.loyalty_points, result.loyalty_tier),
+      },
+    });
+  } catch (error: any) {
+    console.error('Failed to purchase tier:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Payment processing failed' });
+  }
+});
+
 export default rewardsRouter;

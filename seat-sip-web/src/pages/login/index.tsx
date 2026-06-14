@@ -59,12 +59,14 @@ export default function LoginPage() {
         return;
       }
 
-      if (user.status === 'PENDING_APPROVAL') {
+      const status = user.status || user.verification_status || 'PENDING_APPROVAL';
+
+      if (status === 'PENDING_APPROVAL' || status === 'PENDING') {
         setError("Your application is under review. You'll be notified once approved.");
         return;
       }
 
-      if (user.status === 'REJECTED') {
+      if (status === 'REJECTED') {
         setError('Your application was rejected. Contact support.');
         return;
       }
@@ -73,7 +75,7 @@ export default function LoginPage() {
 
       if (user.role === 'ADMIN') {
         router.push('/admin/dashboard');
-      } else if (user.role === 'CAFE_OWNER' && user.status === 'APPROVED') {
+      } else if (user.role === 'CAFE_OWNER' && status === 'APPROVED') {
         router.push('/owner/dashboard');
       } else {
         setError('Your account is not approved for access yet.');
