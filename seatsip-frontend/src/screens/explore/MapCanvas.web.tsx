@@ -1,10 +1,28 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
-import type { Map as MapLibreMap } from 'maplibre-gl';
 
 let _maplibregl: any;
 async function getMaplibregl() {
-  if (!_maplibregl) _maplibregl = await import('maplibre-gl');
+  if (!_maplibregl) {
+    const scriptUrl = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
+    const styleUrl = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';
+    if (!document.querySelector(`link[href="${styleUrl}"]`)) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = styleUrl;
+      document.head.appendChild(link);
+    }
+    if (!document.querySelector(`script[src="${scriptUrl}"]`)) {
+      await new Promise<void>((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = scriptUrl;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Failed to load maplibre-gl from CDN'));
+        document.head.appendChild(script);
+      });
+    }
+    _maplibregl = (window as any).maplibregl;
+  }
   return _maplibregl;
 }
 
@@ -96,7 +114,7 @@ const GALLERY_IMAGES = [
 function setupMarkerClick(
   el: HTMLElement,
   mapContainer: HTMLElement,
-  map: MapLibreMap | null,
+  map: any | null,
   restaurant: Restaurant,
   onGalleryOpen?: () => void,
   onGalleryClose?: () => void,
@@ -379,7 +397,7 @@ function createMarkerElement(
   color: string,
   selected: boolean,
   mapContainer: HTMLElement | null,
-  map: MapLibreMap | null,
+  map: any | null,
   onSelect: (restaurant: Restaurant) => void,
   onGalleryOpen?: () => void,
   onGalleryClose?: () => void,
@@ -416,7 +434,7 @@ function createMarkerElement(
 
 const MapCanvas = forwardRef<MapCanvasHandle, Props>(({ restaurants, city, selectedId, pinColors, onSelect, onGalleryOpen, onGalleryClose }, ref) => {
   const containerRef = useRef<any>(null);
-  const mapRef = useRef<MapLibreMap | null>(null);
+  const mapRef = useRef<any | null>(null);
   const markersRef = useRef<Marker[]>([]);
   const onSelectRef = useRef(onSelect);
   const onGalleryOpenRef = useRef(onGalleryOpen);
