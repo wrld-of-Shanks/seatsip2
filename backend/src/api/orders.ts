@@ -65,6 +65,7 @@ router.get('/', validate({ query: listQuerySchema }), audit('ORDER_LIST', 'order
     cafe_image: c.image_url,
   }));
 
+  secureLogger.info(`[Orders] List for user ${req.user.userId}: ${orders.length} orders found`);
   return res.json({ success: true, data: orders });
 });
 
@@ -77,8 +78,12 @@ router.get('/:id', validate({ params: idParamsSchema }), audit('ORDER_READ', 'or
     },
   });
 
-  if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+  if (!order) {
+    secureLogger.warn(`[Orders] Get order ${req.params.id}: not found for user ${req.user.userId}`);
+    return res.status(404).json({ success: false, message: 'Order not found' });
+  }
 
+  secureLogger.info(`[Orders] Get order ${req.params.id}: found for user ${req.user.userId}`);
   const { cafe, ...rest } = order;
   return res.json({
     success: true,
@@ -121,6 +126,7 @@ router.post('/payment-intent', validate({ body: paymentIntentSchema }), audit('O
     notes: { purpose: 'order_payment', userId: req.user.userId, cafeId: cafe_id },
   });
 
+  secureLogger.info(`[Orders] Payment intent created for user ${req.user.userId}, cafe ${cafe_id}: order ${order.id}`);
   return res.status(201).json({ success: true, data: { orderId: order.id, amount: order.amount, currency: order.currency, keyId: razorpayKeyId() } });
 });
 
@@ -294,8 +300,10 @@ router.post('/', validate({ body: createOrderSchema }), audit('ORDER_CREATE', 'o
       orderId: String(outcome.inserted.id),
     });
 
+    secureLogger.info(`[Orders] Order created: ${outcome.inserted.id} for user ${req.user.userId}, cafe ${input.cafe_id}, ₹${outcome.inserted.total}`);
     return res.status(201).json({ success: true, data: outcome.inserted });
   } catch (error: unknown) {
+    secureLogger.warn(`[Orders] Order creation failed for user ${req.user.userId}: ${(error as Error).message}`);
     return res.status(409).json({ success: false, message: (error as Error).message || 'Order failed' });
   }
 });
@@ -328,6 +336,7 @@ async function refundOrder(req: AuthenticatedRequest, res: Response, orderId: st
       });
       return Number(updated!.wallet_balance);
     });
+    secureLogger.info(`[Orders] Wallet refund for order ${orderId}: ₹${amount} -> wallet balance ₹${walletBalance}`);
     return res.json({ success: true, data: { wallet_balance: walletBalance } });
   }
 
@@ -352,6 +361,7 @@ async function refundOrder(req: AuthenticatedRequest, res: Response, orderId: st
       status: String(refund.status || 'CREATED'),
     },
   });
+  secureLogger.info(`[Orders] Razorpay refund for order ${orderId}: ₹${amount}, refund id: ${refund.id}`);
   return res.json({ success: true, data: refund });
 }
 
@@ -406,6 +416,7 @@ router.patch('/:id/cancel', validate({ params: idParamsSchema }), audit('ORDER_C
         });
         return Number(updated!.wallet_balance);
       });
+      secureLogger.info(`[Orders] Order ${order.id} cancelled (wallet refund): ₹${order.total} returned to user ${req.user.userId}`);
       return res.json({ success: true, data: { order_id: order.id, status: 'CANCELLED', wallet_balance: walletBalance } });
     } catch (error: unknown) {
       return res.status(409).json({ success: false, message: (error as Error)?.message || 'Cancellation failed' });
@@ -435,6 +446,7 @@ router.patch('/:id/cancel', validate({ params: idParamsSchema }), audit('ORDER_C
           },
         });
       });
+      secureLogger.info(`[Orders] Order ${order.id} cancelled (Razorpay refund): ₹${order.total} refund id ${refund.id}`);
       return res.json({ success: true, data: { order_id: order.id, status: 'CANCELLED', refund } });
     } catch (error: unknown) {
       return res.status(502).json({
@@ -444,6 +456,7 @@ router.patch('/:id/cancel', validate({ params: idParamsSchema }), audit('ORDER_C
     }
   }
 
+  secureLogger.warn(`[Orders] Cancel rejected for order ${order.id}: unsupported payment type ${order.payment_method}`);
   return res.status(409).json({ success: false, message: 'Cancellation is not available for this payment type' });
 });
 

@@ -254,15 +254,18 @@ router.get(
   authRegisterLimiter,
   validate({ query: checkEmailQuerySchema }),
   async (req, res) => {
+    let email = '';
     try {
-      const { email } = req.query as unknown as z.infer<typeof checkEmailQuerySchema>;
+      const { email: rawEmail } = req.query as unknown as z.infer<typeof checkEmailQuerySchema>;
+      email = rawEmail;
       const user = await prisma.user.findUnique({
         where: { email },
         select: { id: true },
       });
+      secureLogger.info(`[Auth] Email availability check: ${email} -> ${!user ? 'available' : 'taken'}`);
       return res.json({ available: !user });
     } catch (err: unknown) {
-      secureLogger.error('check email availability failed', err);
+      secureLogger.error(`[Auth] Check email availability failed for ${email}`, err);
       return res.status(500).json({ success: false, message: 'Failed to check email availability' });
     }
   }
@@ -272,10 +275,16 @@ router.post('/register', authRegisterLimiter, validate({ body: registerSchema })
   try {
     const { name, email, password, phone } = req.body as z.infer<typeof registerSchema>;
     const passwordError = validatePasswordStrength(password, [name, email]);
-    if (passwordError) return res.status(400).json({ success: false, message: passwordError });
+    if (passwordError) {
+      secureLogger.warn(`[Auth] Registration rejected for ${email}: password strength check failed`);
+      return res.status(400).json({ success: false, message: passwordError });
+    }
 
     const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
-    if (existing) return res.status(409).json({ success: false, message: 'Email already registered' });
+    if (existing) {
+      secureLogger.warn(`[Auth] Registration rejected for ${email}: email already registered`);
+      return res.status(409).json({ success: false, message: 'Email already registered' });
+    }
 
     const passwordHash = await bcrypt.hash(password, 12);
     const userId = uuidv4();
@@ -313,6 +322,7 @@ router.post('/register', authRegisterLimiter, validate({ body: registerSchema })
     });
 
     const payload = authSuccessPayload(userPublicFields(user!) as Record<string, unknown>, tokens.accessToken, tokens.refreshToken);
+    secureLogger.info(`[Auth] Registration successful: ${email} (user: ${userId})`);
     if (useBrowserRefreshCookie(req as Request)) {
       setRefreshTokenCookie(res, tokens.refreshToken);
       return res.status(201).json({
@@ -328,7 +338,7 @@ router.post('/register', authRegisterLimiter, validate({ body: registerSchema })
     if (code === 'P2002') {
       return res.status(409).json({ success: false, message: 'Email already registered' });
     }
-    secureLogger.error('registration failed', err);
+    secureLogger.error('[Auth] Registration failed', err);
     return res.status(500).json({ success: false, message: 'Registration failed' });
   }
 });
@@ -497,18 +507,20 @@ router.post(
       const payload = authSuccessPayload(safeUser, tokens.accessToken, tokens.refreshToken);
       if (useBrowserRefreshCookie(req as Request)) {
         setRefreshTokenCookie(res, tokens.refreshToken);
-        return res.json({
-          success: true,
-          token: tokens.accessToken,
-          user: payload.user,
-          data: { user: payload.user, accessToken: tokens.accessToken },
-        });
-      }
-      return res.json(payload);
-    } catch (err: unknown) {
-      secureLogger.error('google auth failed', err);
-      return res.status(401).json({ success: false, message: (err as Error)?.message || 'Google authentication failed' });
+      secureLogger.info(`[Auth] Google sign-in successful: ${profile.email} (user: ${user!.id})`);
+      return res.json({
+        success: true,
+        token: tokens.accessToken,
+        user: payload.user,
+        data: { user: payload.user, accessToken: tokens.accessToken },
+      });
     }
+    secureLogger.info(`[Auth] Google sign-in successful: ${profile.email} (user: ${user!.id})`);
+    return res.json(payload);
+  } catch (err: unknown) {
+    secureLogger.error('[Auth] Google authentication failed', err);
+    return res.status(401).json({ success: false, message: (err as Error)?.message || 'Google authentication failed' });
+  }
   }
 );
 
@@ -524,6 +536,7 @@ router.post('/login', authLoginLimiter, validate({ body: loginSchema }), audit('
       });
       if (inactiveOwner?.role === 'CAFE_OWNER') {
         const status = inactiveOwner.auth_provider === 'owner_rejected' ? 'REJECTED' : 'PENDING_APPROVAL';
+        secureLogger.warn(`[Auth] Login rejected: ${email} - cafe owner status: ${status}`);
         return res.status(403).json({
           success: false,
           status,
@@ -533,16 +546,19 @@ router.post('/login', authLoginLimiter, validate({ body: loginSchema }), audit('
         });
       }
       await recordFailedLogin(email);
+      secureLogger.warn(`[Auth] Login failed: ${email} - user not found or inactive`);
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     if (user.lockout_until && user.lockout_until > new Date()) {
+      secureLogger.warn(`[Auth] Login rejected: ${email} - account locked until ${user.lockout_until}`);
       return res.status(423).json({ success: false, message: 'Account temporarily locked', lockoutUntil: user.lockout_until });
     }
 
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       const retryAfterSeconds = await recordFailedLogin(email);
+      secureLogger.warn(`[Auth] Login failed: ${email} - invalid password`);
       return res.status(401).json({ success: false, message: 'Invalid credentials', retryAfterSeconds: retryAfterSeconds || undefined });
     }
 
@@ -550,6 +566,7 @@ router.post('/login', authLoginLimiter, validate({ body: loginSchema }), audit('
     const tokens = generateTokens({ userId: user.id, email: user.email, role: user.role as 'USER' | 'ADMIN' | 'CAFE_OWNER' });
     await storeRefreshToken(prisma, user.id, tokens.refreshToken, tokens.familyId);
 
+    secureLogger.info(`[Auth] Login successful: ${email} (user: ${user.id}, role: ${user.role})`);
     const { password_hash: _p, ...safeUser } = user;
     const payload = authSuccessPayload(safeUser as Record<string, unknown>, tokens.accessToken, tokens.refreshToken);
     if (useBrowserRefreshCookie(req as Request)) {
@@ -563,7 +580,7 @@ router.post('/login', authLoginLimiter, validate({ body: loginSchema }), audit('
     }
     return res.json(payload);
   } catch (err) {
-    secureLogger.error('login failed', err);
+    secureLogger.error('[Auth] Login failed with error', err);
     return res.status(500).json({ success: false, message: 'Login failed' });
   }
 });
@@ -610,6 +627,7 @@ router.post('/refresh', authRefreshLimiter, validate({ body: refreshBodySchema }
     await storeRefreshToken(tx, user.id, tokens.refreshToken, tokens.familyId);
   });
 
+  secureLogger.info(`[Auth] Token refreshed for user ${user.id}`);
   if (useBrowserRefreshCookie(req as Request)) {
     setRefreshTokenCookie(res, tokens.refreshToken);
     return res.json({ success: true, data: { accessToken: tokens.accessToken } });
@@ -639,6 +657,7 @@ router.post('/logout', authenticate, validate({ body: logoutSchema }), audit('LO
     await revokeTok(tx, cookieTok);
   });
   clearRefreshTokenCookie(res);
+  secureLogger.info(`[Auth] Logout successful for user ${req.user.userId}`);
   return res.json({ success: true, message: 'Logged out' });
 });
 
@@ -659,7 +678,11 @@ router.get('/me', authenticate, audit('ME', 'auth'), async (req: AuthenticatedRe
       created_at: true,
     },
   });
-  if (!dbUser) return res.status(404).json({ success: false, message: 'User not found' });
+  if (!dbUser) {
+    secureLogger.warn(`[Auth] GET /me: user ${req.user.userId} not found`);
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+  secureLogger.info(`[Auth] Profile retrieved for user ${req.user.userId}`);
   return res.json({ success: true, data: dbUser });
 });
 
@@ -683,9 +706,10 @@ router.post(
       }
       const { password } = req.body as z.infer<typeof verifyPasswordSchema>;
       const valid = await bcrypt.compare(password, row.password_hash);
+      secureLogger.info(`[Auth] Password verification for user ${req.user.userId}: ${valid ? 'correct' : 'incorrect'}`);
       return res.json({ success: true, data: { valid } });
     } catch (err) {
-      secureLogger.error('verify-password failed', err);
+      secureLogger.error('[Auth] Password verification failed', err);
       return res.status(500).json({ success: false, message: 'Verification failed' });
     }
   }
@@ -739,6 +763,7 @@ router.post(
         select: { deletion_scheduled_at: true },
       });
 
+      secureLogger.info(`[Auth] Account deletion scheduled for user ${userId}, grace until ${row?.deletion_scheduled_at}`);
       return res.json({
         success: true,
         data: {
@@ -748,7 +773,7 @@ router.post(
         },
       });
     } catch (err: unknown) {
-      secureLogger.error('delete account failed', err);
+      secureLogger.error('[Auth] Delete account failed', err);
       return res.status(500).json({ success: false, message: 'Could not process account deletion' });
     }
   }
@@ -766,10 +791,10 @@ router.post(
         data: { terms_accepted_at: new Date() },
       });
 
-      secureLogger.info(`User ${userId} accepted terms`);
+      secureLogger.info(`[Auth] Terms accepted by user ${userId}`);
       return res.json({ success: true, message: 'Terms accepted and recorded' });
     } catch (err: unknown) {
-      secureLogger.error('accept terms failed', err);
+      secureLogger.error('[Auth] Accept terms failed', err);
       return res.status(500).json({ success: false, message: 'Could not record terms acceptance' });
     }
   }
@@ -822,9 +847,10 @@ router.post(
         data: { is_active: true, deletion_scheduled_at: null },
       });
 
+      secureLogger.info(`[Auth] Account deletion cancelled for user ${user.id}`);
       return res.json({ success: true, message: 'Account deletion cancelled. You can sign in again.' });
     } catch (err: unknown) {
-      secureLogger.error('cancel account deletion failed', err);
+      secureLogger.error('[Auth] Cancel account deletion failed', err);
       return res.status(500).json({ success: false, message: 'Could not cancel account deletion' });
     }
   }
@@ -848,12 +874,13 @@ router.post(
         await generateAndSendOtpWithChannel(email, phone, channel);
       }
 
+      secureLogger.info(`[Auth] Forgot password OTP requested for ${email} via ${channel}`);
       return res.json({
         success: true,
         message: `If this email is registered, we have sent a 6-digit OTP code via ${channel}.`,
       });
     } catch (err: unknown) {
-      secureLogger.error('forgot password request failed', err);
+      secureLogger.error('[Auth] Forgot password request failed', err);
       return res.status(500).json({ success: false, message: 'Failed to process request' });
     }
   }
@@ -895,12 +922,13 @@ router.post(
         });
       });
       
+      secureLogger.info(`[Auth] Password reset successful for ${email}`);
       return res.json({
         success: true,
         message: 'Password reset successfully. You can now log in with your new password.',
       });
     } catch (err: unknown) {
-      secureLogger.error('forgot password reset failed', err);
+      secureLogger.error('[Auth] Forgot password reset failed', err);
       return res.status(500).json({ success: false, message: 'Failed to reset password' });
     }
   }

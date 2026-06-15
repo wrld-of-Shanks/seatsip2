@@ -5,6 +5,7 @@ import { prisma } from '../db';
 import { authenticate } from '../common/auth';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 import { validate } from '../security/http';
+import { secureLogger } from '../security/logger';
 import { razorpay, verifyRazorpayPaymentSignature } from '../payments/razorpay';
 
 const subscriptionsRouter = Router();
@@ -52,6 +53,7 @@ subscriptionsRouter.get('/status', async (req: AuthenticatedRequest, res: Respon
   const durationDays = sub?.plan_type === 'YEARLY' ? 365 : SUBSCRIPTION_DURATION_DAYS;
   const price = sub?.plan_type === 'YEARLY' ? Math.round(SUBSCRIPTION_PRICE * 12 * 0.85) : SUBSCRIPTION_PRICE;
 
+  secureLogger.info(`[Subscriptions] Status check for user ${userId}: ${isActive ? 'active' : 'inactive'}`);
   return res.json({
     success: true,
     isSubscribed: isActive,
@@ -98,6 +100,7 @@ subscriptionsRouter.post('/create-order', validate({ body: createOrderSchema }),
       notes: { userId, planType },
     });
 
+    secureLogger.info(`[Subscriptions] Create order for user ${userId}: order ${order.id}, ₹${Number(order.amount) / 100}`);
     return res.json({
       success: true,
       orderId: order.id,
@@ -105,6 +108,7 @@ subscriptionsRouter.post('/create-order', validate({ body: createOrderSchema }),
       currency: order.currency,
     });
   } catch (err: any) {
+    secureLogger.error(`[Subscriptions] Create order failed for user ${userId}`, err);
     return res.status(502).json({ success: false, message: 'Failed to create payment order', error: err.message });
   }
 });
@@ -275,6 +279,7 @@ subscriptionsRouter.post('/activate', validate({ body: activateSchema }), async 
     { expiresAt: result.extended ? result.newExpiry!.toISOString() : result.expiresAt.toISOString() },
   );
 
+  secureLogger.info(`[Subscriptions] Activated for user ${userId}: ${planType}, ₹${price}, ${result.extended ? 'extended' : 'new'}`);
   return res.json({
     success: true,
     message: result.extended ? 'Subscription extended successfully' : 'Subscription activated successfully',
@@ -315,6 +320,7 @@ subscriptionsRouter.post('/cancel', async (req: AuthenticatedRequest, res: Respo
     `Your subscription will remain active until ${result.expiresAt.toLocaleDateString()}. After that, points will expire after 12 months of inactivity.`,
   );
 
+  secureLogger.info(`[Subscriptions] Cancelled for user ${userId}, benefits until ${result.expiresAt.toLocaleDateString()}`);
   return res.json({
     success: true,
     message: `Subscription cancelled. Benefits continue until ${result.expiresAt.toLocaleDateString()}.`,
@@ -391,6 +397,7 @@ subscriptionsRouter.post('/auto-renew-check', async (req: AuthenticatedRequest, 
         'Subscription Auto-Renewed',
         `Your ${sub.plan_type} subscription has been renewed until ${result.newExpiry!.toLocaleDateString()}. ₹${price} charged from wallet.`,
       );
+      secureLogger.info(`[Subscriptions] Auto-renewed for user ${userId}: new expiry ${result.newExpiry}`);
       return res.json({ success: true, needsRenewal: false, renewed: true, newExpiry: result.newExpiry });
     }
 
@@ -399,9 +406,11 @@ subscriptionsRouter.post('/auto-renew-check', async (req: AuthenticatedRequest, 
       'Subscription Expired — Insufficient Wallet Balance',
       `Your ${sub.plan_type} subscription could not be auto-renewed. Please add funds to your wallet and re-subscribe.`,
     );
+    secureLogger.warn(`[Subscriptions] Auto-renew failed for user ${userId}: insufficient wallet balance`);
     return res.json({ success: true, needsRenewal: false, renewed: false, reason: result.reason });
   }
 
+  secureLogger.info(`[Subscriptions] Auto-renew check for user ${userId}: ${daysUntilExpiry} days left, autoRenew: ${sub.auto_renew}`);
   return res.json({
     success: true,
     needsRenewal: daysUntilExpiry <= 7,

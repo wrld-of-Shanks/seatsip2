@@ -5,3 +5,6 @@ dist/
 *.db-wal
 .env
 npm-debug.log*
+logs/
+pids/
+*.pid

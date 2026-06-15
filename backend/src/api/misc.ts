@@ -5,6 +5,7 @@ import { prisma } from '../db';
 import { authenticate } from '../common/auth';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 import { audit, validate } from '../security/http';
+import { secureLogger } from '../security/logger';
 import { razorpay, razorpayKeyId, verifyRazorpayPaymentSignature } from '../payments/razorpay';
 import { savePushToken } from '../services/pushNotifications';
 
@@ -84,7 +85,9 @@ function cleanupExpiredCarts(): void {
 setInterval(cleanupExpiredCarts, 60 * 60 * 1000).unref();
 
 cartRouter.get('/', audit('CART_READ', 'cart'), async (req: AuthenticatedRequest, res: Response) => {
-  return res.json({ success: true, data: await getCartPayload(req.user.userId) });
+  const payload = await getCartPayload(req.user.userId);
+  secureLogger.info(`[Cart] Read for user ${req.user.userId}: ${payload.items.length} items, ₹${payload.total}`);
+  return res.json({ success: true, data: payload });
 });
 
 cartRouter.post('/add', validate({ body: addCartSchema }), audit('CART_ADD', 'cart'), async (req: AuthenticatedRequest, res: Response) => {
@@ -128,9 +131,11 @@ cartRouter.post('/add', validate({ body: addCartSchema }), audit('CART_ADD', 'ca
       }
     });
 
-    return res.json({ success: true, data: await getCartPayload(req.user.userId) });
+    secureLogger.info(`[Cart] Added item ${menu_item_id} x${quantity} for user ${req.user.userId}`);
+  secureLogger.info(`[Cart] Updated cart item ${req.params.id} to qty ${quantity} for user ${req.user.userId}`);
+  return res.json({ success: true, data: await getCartPayload(req.user.userId) });
   } catch (err: unknown) {
-    console.error('Error adding to cart:', err);
+    secureLogger.error('[Cart] Add failed', err);
     return res.status(409).json({ success: false, message: (err as Error).message || 'Error adding to cart' });
   }
 });
@@ -159,12 +164,17 @@ cartRouter.patch('/:id', validate({ params: idParamsSchema, body: updateCartSche
 
 cartRouter.delete('/clear', audit('CART_CLEAR', 'cart'), async (req: AuthenticatedRequest, res: Response) => {
   await prisma.cartItem.deleteMany({ where: { user_id: req.user.userId } });
+  secureLogger.info(`[Cart] Cleared for user ${req.user.userId}`);
   return res.json({ success: true, data: await getCartPayload(req.user.userId) });
 });
 
 cartRouter.delete('/:id', validate({ params: idParamsSchema }), audit('CART_DELETE', 'cart'), async (req: AuthenticatedRequest, res: Response) => {
   const result = await prisma.cartItem.deleteMany({ where: { id: req.params.id, user_id: req.user.userId } });
-  if (!result.count) return res.status(404).json({ success: false, message: 'Cart item not found' });
+  if (!result.count) {
+    secureLogger.warn(`[Cart] Delete item ${req.params.id}: not found for user ${req.user.userId}`);
+    return res.status(404).json({ success: false, message: 'Cart item not found' });
+  }
+  secureLogger.info(`[Cart] Deleted item ${req.params.id} for user ${req.user.userId}`);
   return res.json({ success: true, data: await getCartPayload(req.user.userId) });
 });
 
@@ -188,6 +198,7 @@ usersRouter.get('/profile', audit('USER_PROFILE_READ', 'user'), async (req: Auth
       created_at: true,
     },
   });
+  secureLogger.info(`[Profile] Read for user ${req.user.userId}`);
   return res.json({ success: true, data: dbUser });
 });
 
@@ -197,7 +208,9 @@ usersRouter.post(
   audit('PUSH_TOKEN', 'user'),
   async (req: AuthenticatedRequest, res: Response) => {
     await savePushToken(req.user.userId, (req.body as z.infer<typeof pushTokenSchema>).token);
-    return res.json({ success: true });
+    secureLogger.info(`[Profile] Push token saved for user ${req.user.userId}`);
+  secureLogger.info(`[Notifications] Marked all as read for user ${req.user.userId}`);
+  return res.json({ success: true });
   }
 );
 
@@ -229,11 +242,13 @@ usersRouter.patch(
         avatar: true,
       },
     });
+    secureLogger.info(`[Profile] Updated for user ${req.user.userId}: name=${name !== undefined}, phone=${phone !== undefined}, avatar=${avatar !== undefined}`);
     return res.json({ success: true, data: updated });
   }
 );
 
 usersRouter.post('/wallet/topup', (_req: Request, res: Response) => {
+  secureLogger.warn('[Wallet] Direct top-up attempted (disabled)');
   return res.status(410).json({
     success: false,
     message: 'Direct wallet top-up is disabled. Create a Razorpay top-up order and verify the payment before crediting wallet.',
@@ -261,6 +276,7 @@ usersRouter.post('/wallet/topup/order', validate({ body: walletTopupOrderSchema 
     },
   });
 
+  secureLogger.info(`[Wallet] Top-up order created for user ${req.user.userId}: order ${order.id}, ₹${amount}`);
   return res.status(201).json({ success: true, data: { orderId: order.id, amount: order.amount, currency: order.currency, keyId: razorpayKeyId() } });
 });
 
@@ -309,6 +325,7 @@ usersRouter.post('/wallet/topup/verify', validate({ body: walletTopupVerifySchem
     return updated!.wallet_balance;
   });
 
+  secureLogger.info(`[Wallet] Top-up verified for user ${req.user.userId}: ₹${event.amount} added, new balance ₹${walletBalance}`);
   return res.json({ success: true, data: { wallet_balance: walletBalance } });
 });
 
@@ -318,6 +335,7 @@ usersRouter.get('/wallet/transactions', audit('WALLET_TRANSACTIONS_READ', 'walle
     orderBy: { created_at: 'desc' },
     take: 50,
   });
+  secureLogger.info(`[Wallet] Transactions read for user ${req.user.userId}: ${transactions.length} entries`);
   return res.json({ success: true, data: transactions });
 });
 
@@ -329,6 +347,7 @@ notificationsRouter.get('/unread-count', audit('NOTIFICATIONS_UNREAD', 'notifica
   const count = await prisma.notification.count({
     where: { user_id: req.user.userId, is_read: false },
   });
+  secureLogger.info(`[Notifications] Unread count for user ${req.user.userId}: ${count}`);
   return res.json({ success: true, data: { count } });
 });
 
@@ -341,6 +360,7 @@ notificationsRouter.get('/', audit('NOTIFICATIONS_READ', 'notification'), async 
     }),
     prisma.notification.count({ where: { user_id: req.user.userId, is_read: false } }),
   ]);
+  secureLogger.info(`[Notifications] List for user ${req.user.userId}: ${notifs.length} notifications, ${unread} unread`);
   return res.json({ success: true, data: notifs, unread });
 });
 

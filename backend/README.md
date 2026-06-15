@@ -1,208 +1,93 @@
 # SeatSip Backend API
 
-A production-ready REST API for the SeatSip café discovery, table reservation, and ordering platform.
+REST API for café discovery, table reservations, ordering, payments (Razorpay), wallet, loyalty points, subscriptions, and admin management.
 
 ## Stack
-- **Runtime**: Node.js 18+
-- **Framework**: Express.js
-- **Database**: SQLite via `better-sqlite3` (zero-config, file-based)
-- **Auth**: JWT (access + refresh tokens)
-- **Language**: TypeScript
+- **Runtime**: Node.js 20, TypeScript
+- **Framework**: Express 4
+- **Database**: PostgreSQL 18 (Prisma 6 ORM)
+- **Cache/Sessions**: Redis 7
+- **Auth**: JWT (access + refresh token rotation), Google OAuth
+- **Payments**: Razorpay Orders API + HMAC-SHA256 webhook verification
+- **Logging**: Pino structured JSON + `secureLogger` with PII redaction
+- **Load Balancer**: PM2 cluster mode (all CPU cores)
 
 ## Prerequisites
-- Node.js 18+
-- npm or yarn
-- Python 3 + build tools (for native SQLite module):
-  - **macOS**: `xcode-select --install`
-  - **Ubuntu/Debian**: `sudo apt install build-essential python3`
-  - **Windows**: Install "Desktop development with C++" via Visual Studio Build Tools
+- Node.js 20+
+- PostgreSQL 18+ (Homebrew: `brew install postgresql@18`)
+- Redis 7+ (Homebrew: `brew install redis`)
+- Expo CLI (for push notifications)
 
-## Setup & Run
+## Setup
 
 ```bash
-# 1. Install dependencies
+cd backend
+cp .env.example .env
 npm install
-
-# 2. Initialize & seed the database
+npx prisma db push
 npm run db:seed
-
-# 3. Start development server
-npm run dev
-
-# OR build and run production
-npm run build && npm start
 ```
 
-Server runs at: **http://localhost:3000**
+## Run
+
+```bash
+# Development (single process)
+npm run dev                # → http://localhost:3002
+
+# Production cluster (8 workers, load balanced)
+npm run build
+npm run start:cluster:dev  # → http://localhost:3002
+
+# Zero-downtime reload
+npm run reload:cluster
+```
 
 ## Test Credentials
-| Role  | Email                  | Password    |
-|-------|------------------------|-------------|
-| User  | arjun@example.com      | password123 |
-| User  | priya@example.com      | password123 |
-| Admin | admin@seatsip.com      | admin123    |
+| Role       | Email                  | Password    |
+|------------|------------------------|-------------|
+| User       | arjun@example.com      | password123 |
+| User       | priya@example.com      | password123 |
+| Admin      | admin@seatsip.com      | admin123    |
 
-## API Endpoints
+## Logging
 
-### Auth
-| Method | Path                        | Auth | Description             |
-|--------|-----------------------------|------|-------------------------|
-| POST   | /api/v1/auth/register       | No   | Register new user       |
-| POST   | /api/v1/auth/login          | No   | Login                   |
-| POST   | /api/v1/auth/refresh        | No   | Refresh access token    |
-| POST   | /api/v1/auth/logout         | Yes  | Logout                  |
-| GET    | /api/v1/auth/me             | Yes  | Get current user        |
-| GET    | /api/v1/auth/check-email    | No   | Check email availability|
+Every API endpoint logs descriptive success/error messages with `secureLogger`:
+- Success: `[Auth] Login successful: arjun@example.com (user: id, role: USER)`
+- Error: `[Auth] Login failed: arjun@example.com - user not found or inactive`
+- Admin: `[Admin] Notification sent by admin-id: "title" to 50 users`
 
-### Cafes
-| Method | Path                        | Auth | Description             |
-|--------|-----------------------------|------|-------------------------|
-| GET    | /api/v1/cafes               | No   | List cafes (filterable) |
-| GET    | /api/v1/cafes/:id           | No   | Get cafe details        |
-| GET    | /api/v1/cafes/:id/menu      | No   | Get cafe menu           |
-| GET    | /api/v1/cafes/:id/tables    | No   | Get available tables    |
-| GET    | /api/v1/cafes/:id/reviews   | No   | Get cafe reviews        |
-| POST   | /api/v1/cafes/:id/reviews   | Yes  | Post a review           |
+Logs are Pino structured JSON with `pino-pretty` in development. PII is automatically redacted from payloads.
 
-### Orders
-| Method | Path                        | Auth | Description        |
-|--------|-----------------------------|------|--------------------|
-| GET    | /api/v1/orders              | Yes  | My order history   |
-| GET    | /api/v1/orders/:id          | Yes  | Order details      |
-| POST   | /api/v1/orders              | Yes  | Place an order     |
-| PATCH  | /api/v1/orders/:id/cancel   | Yes  | Cancel order       |
+## PM2 Cluster Management
 
-### Reservations
-| Method | Path                            | Auth | Description           |
-|--------|---------------------------------|------|-----------------------|
-| GET    | /api/v1/reservations            | Yes  | My reservations       |
-| GET    | /api/v1/reservations/:id        | Yes  | Reservation details   |
-| POST   | /api/v1/reservations            | Yes  | Book a table          |
-| PATCH  | /api/v1/reservations/:id/cancel | Yes  | Cancel reservation    |
+| Command | Description |
+|---------|-------------|
+| `npm run start:cluster` | Start production cluster (8 workers) |
+| `npm run start:cluster:dev` | Start development cluster |
+| `npm run reload:cluster` | Zero-downtime rolling restart |
+| `npm run restart:cluster` | Hard restart all workers |
+| `npm run stop:cluster` | Stop all workers |
+| `npm run status:cluster` | Show worker status (CPU/mem/uptime) |
+| `npm run logs:cluster` | Tail combined logs |
+| `npm run monit:cluster` | Real-time monitoring dashboard |
 
-### Cart
-| Method | Path                   | Auth | Description        |
-|--------|------------------------|------|--------------------|
-| GET    | /api/v1/cart           | Yes  | Get cart           |
-| POST   | /api/v1/cart/add       | Yes  | Add item to cart   |
-| PATCH  | /api/v1/cart/:id       | Yes  | Update quantity    |
-| DELETE | /api/v1/cart/clear     | Yes  | Clear cart         |
+## API Docs
 
-### Users & Wallet
-| Method | Path                              | Auth | Description             |
-|--------|-----------------------------------|------|-------------------------|
-| GET    | /api/v1/users/profile             | Yes  | Get profile             |
-| PATCH  | /api/v1/users/profile             | Yes  | Update profile          |
-| POST   | /api/v1/users/wallet/topup        | Yes  | Top up wallet           |
-| GET    | /api/v1/users/wallet/transactions | Yes  | Wallet history          |
+Swagger UI: http://localhost:3002/api/docs
 
-### Notifications
-| Method | Path                              | Auth | Description         |
-|--------|-----------------------------------|------|---------------------|
-| GET    | /api/v1/notifications             | Yes  | Get notifications   |
-| PATCH  | /api/v1/notifications/read-all    | Yes  | Mark all read       |
+OpenAPI spec at `src/api/swagger.ts`.
 
-## Query Parameters
+## Key Environment Variables
 
-### GET /api/v1/cafes
-- `city` — filter by city (e.g. `Bengaluru`)
-- `mood` — filter by mood tag (e.g. `work`, `date`, `chill`)
-- `search` — text search across name, description, address
-- `sort` — `rating` (default), `name`, `price`
-- `limit` / `offset` — pagination
-
-### GET /api/v1/cafes/:id/tables
-- `date` — YYYY-MM-DD format
-- `time` — HH:MM format (24h)
-- `party_size` — minimum seat count
-
-## Request Examples
-
-### Register
-```bash
-curl -X POST http://localhost:3000/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"name":"John","email":"john@test.com","password":"pass123","phone":"+91-9999999999"}'
-```
-
-### Login
-```bash
-curl -X POST http://localhost:3000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"arjun@example.com","password":"password123"}'
-```
-
-### Get Cafes
-```bash
-curl http://localhost:3000/api/v1/cafes?city=Bengaluru&mood=work
-```
-
-### Place Order
-```bash
-curl -X POST http://localhost:3000/api/v1/orders \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "cafe_id": "<cafe-id>",
-    "order_type": "DINE_IN",
-    "payment_method": "WALLET",
-    "items": [
-      {"menu_item_id": "<item-id>", "quantity": 2}
-    ]
-  }'
-```
-
-### Book a Table
-```bash
-curl -X POST http://localhost:3000/api/v1/reservations \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "cafe_id": "<cafe-id>",
-    "table_id": "<table-id>",
-    "date": "2026-05-01",
-    "time": "19:00",
-    "party_size": 2,
-    "special_requests": "Window seat preferred",
-    "pre_order_items": [
-      {"menu_item_id": "<item-id>", "quantity": 1}
-    ]
-  }'
-```
-
-## Database Schema
-
-The SQLite database (`seatsip.db`) is created automatically on first run. Tables:
-- `users` — user accounts, wallet, loyalty points
-- `refresh_tokens` — JWT refresh token store
-- `cafes` — café listings with geo, moods, tags
-- `tables` — physical tables per café with floor plan positions
-- `menu_categories` — menu sections per café
-- `menu_items` — individual menu items with pricing
-- `orders` — customer orders with line items (JSON)
-- `reservations` — table bookings with optional pre-order
-- `reviews` — user reviews per café
-- `cart_items` — per-user shopping cart
-- `wallet_transactions` — wallet top-up / debit history
-- `notifications` — in-app notification inbox
-
-## Environment Variables (.env)
-
-```env
-PORT=3000
-JWT_SECRET=your-super-secret-key-change-this
-JWT_EXPIRES_IN=7d
-JWT_REFRESH_SECRET=your-refresh-secret-change-this
-NODE_ENV=development
-DB_PATH=./seatsip.db
-CORS_ORIGIN=*
-```
-
-## Mobile App Integration
-
-Update the mobile app's API base URL to point to this server:
-```
-http://<your-ip>:3000/api/v1
-```
-
-Use `ifconfig` (macOS/Linux) or `ipconfig` (Windows) to find your local IP if testing on a physical device.
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection |
+| `JWT_ACCESS_SECRET_CURRENT` | Access token signing (64+ chars) |
+| `JWT_REFRESH_SECRET_CURRENT` | Refresh token signing |
+| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | Payment processing |
+| `RAZORPAY_WEBHOOK_SECRET` | Webhook HMAC verification |
+| `ALLOWED_ORIGINS` | CORS whitelist (production) |
+| `EXPO_ACCESS_TOKEN` | Expo Push API |
+| `GOOGLE_CLIENT_ID` | Google OAuth |
+| `SENTRY_DSN` | Error tracking (optional) |

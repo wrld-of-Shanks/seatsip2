@@ -5,6 +5,7 @@ import { prisma } from '../db';
 import { authenticate } from '../common/auth';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 import { validate } from '../security/http';
+import { secureLogger } from '../security/logger';
 
 const offersRouter = Router();
 offersRouter.use(authenticate);
@@ -78,6 +79,7 @@ offersRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
       };
     });
 
+  secureLogger.info(`[Offers] List for user ${userId}: ${enriched.length} offers available`);
   return res.json({
     success: true,
     offers: enriched,
@@ -201,6 +203,7 @@ offersRouter.post('/redeem', validate({ body: redeemOfferSchema }), async (req: 
     // silent
   }
 
+  secureLogger.info(`[Offers] Redeemed ${offerId} for user ${userId}: ${result.pointsEarned > 0 ? `+${result.pointsEarned} pts` : 'no points'}`);
   return res.json({
     success: true,
     message: result.pointsEarned > 0
@@ -247,6 +250,7 @@ offersRouter.post('/create', validate({ body: createOfferSchema }), async (req: 
     },
   });
 
+  secureLogger.info(`[Offers] Created offer ${offer.id}: ${offer.title}`);
   return res.json({ success: true, message: 'Offer created', offer });
 });
 
@@ -260,6 +264,7 @@ offersRouter.get('/admin/all', async (req: AuthenticatedRequest, res: Response) 
     orderBy: { valid_from: 'desc' },
   });
 
+  secureLogger.info(`[Offers] Admin list: ${offers.length} offers found`);
   return res.json({ success: true, offers });
 });
 

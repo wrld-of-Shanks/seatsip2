@@ -45,41 +45,33 @@ async function boot() {
   void expireStaleSubscriptions();
   setInterval(expireStaleSubscriptions, SUBSCRIPTION_EXPIRY_INTERVAL_MS);
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     if (process.env.NODE_ENV === 'production') {
-      secureLogger.info('SeatSip API listening', { port: PORT });
+      secureLogger.info('SeatSip API worker started', { port: PORT, pid: process.pid });
       return;
     }
     console.log(`
-🚀 SeatSip API running on http://localhost:${PORT}
-📦 Database: SQLite (Prisma)
-📋 Endpoints:
-   POST   /api/v1/auth/register
-   POST   /api/v1/auth/login
-   POST   /api/v1/auth/google
-   GET    /api/v1/cafes
-   GET    /api/v1/cafes/:id/menu
-   POST   /api/v1/reservations
-   POST   /api/v1/orders
-   GET    /api/v1/cart
-   
-   /* Admin & Owner Panel integrations */
-   GET    /api/v1/admin/stats
-   GET    /api/v1/admin/revenue
-   GET    /api/v1/admin/audit-logs
-   GET    /api/v1/admin/settings
-   PATCH  /api/v1/admin/settings/:id
-   POST   /api/v1/admin/settings/batch
-   GET    /api/v1/admin/feature-flags
-   PATCH  /api/v1/admin/feature-flags/:id
-   GET    /api/v1/admin/roles
-   GET    /api/v1/admin/permissions
-   PATCH  /api/v1/admin/roles/:selectedRole/permissions
-   GET    /api/v1/admin/users
-   POST   /api/v1/admin/users
-   PATCH  /api/v1/admin/users/:id
-   DELETE /api/v1/admin/users/:id
+🚀 SeatSip API worker (pid ${process.pid}) running on http://localhost:${PORT}
+📦 Database: PostgreSQL (Prisma)
   `);
+  });
+
+  const shutdown = async (signal: string) => {
+    secureLogger.info(`Worker ${process.pid} shutting down (${signal})`, { pid: process.pid });
+    server.close(async () => {
+      await prisma.$disconnect();
+      process.exit(0);
+    });
+    setTimeout(() => {
+      secureLogger.error('Forced shutdown after timeout', { pid: process.pid });
+      process.exit(1);
+    }, 10000).unref();
+  };
+
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('message', (msg) => {
+    if (msg === 'shutdown') void shutdown('PM2_SHUTDOWN');
   });
 }
 

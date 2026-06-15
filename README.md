@@ -58,7 +58,7 @@ A café discovery, table reservation, ordering, and loyalty platform — with re
 - **Payments**: Razorpay Orders API + webhook signature verification with HMAC-SHA256
 - **Rate Limiting**: `express-rate-limit` with Redis store — general (60/min/IP), strict (20/min/IP)
 - **Caching/Sessions**: Redis 7 (mobile location sessions, rate limiting token bucket)
-- **Logging**: Pino structured JSON + `pino-http` for HTTP request logging
+- **Logging**: Pino structured JSON + `pino-http` for HTTP request logging — every API endpoint logs success/error with descriptive `[Context]` prefix
 - **Monitoring**: Sentry error tracking (conditional on `SENTRY_DSN`)
 - **Security**: Helmet, CORS whitelist, input sanitization, request-ID tracing, audit logging
 - **Email**: Nodemailer (SMTP — OTP delivery, notification emails)
@@ -343,15 +343,37 @@ seat-sip-web/
 
 ## Infrastructure
 
+### Load Balancer (PM2 Cluster)
+
+The backend runs in **PM2 cluster mode** to distribute traffic across all available CPU cores:
+
+- **`ecosystem.config.js`** — PM2 config with `instances: 'max'` (8 workers on current hardware)
+- **Round-robin load balancing** — PM2 master process distributes incoming connections evenly across workers
+- **Graceful shutdown** — Workers drain active connections on SIGTERM before exiting (10s timeout)
+- **Zero-downtime reload** — `pm2 reload` restarts workers one-by-one without dropping requests
+- **Memory management** — Workers auto-restart at 1GB heap usage (`max_memory_restart`)
+- **Health checks** — Workers report `GET /health` independently
+
+Start the cluster:
+```bash
+cd backend
+npm run start:cluster:dev    # Development (8 workers, port 3002)
+npm run start:cluster         # Production (8 workers, port 3002)
+npm run reload:cluster        # Zero-downtime restart
+npm run status:cluster        # View worker status
+npm run logs:cluster          # Tail combined logs
+npm run monit:cluster         # Real-time CPU/memory per worker
+```
+
 ### Docker
 
 ```yaml
 services:
-  api:      # Node.js Express server (port 3000)
+  api:      # Node.js Express cluster (port 3002)
     build: backend/Dockerfile
+    command: pm2-runtime ecosystem.config.js
     depends_on: [redis]
-    healthcheck: curl http://localhost:3000/health (30s interval)
-    volumes: persistent SQLite data /var/lib/seatsip/
+    healthcheck: curl http://localhost:3002/health (30s interval)
     
   redis:    # Redis 7 (rate limiting, sessions)
     image: redis:7-alpine
@@ -468,7 +490,9 @@ Key endpoint categories:
 5. **Separate push token table**: `DevicePushToken` decoupled from `User` — supports multi-device push
 6. **Subscription auto-renew**: Charges wallet on expiry; if insufficient, disables auto-renew and notifies user
 7. **Priority redemption**: Subscribers get 10% discount on reward points cost
-8. **Lazy maplibre-gl**: Dynamically imported on web only — keeps mobile bundle size smaller
+8. **Comprehensive logging**: Every API endpoint logs descriptive success/error messages with `[Context]` prefix via `secureLogger` — visible in server console only, no frontend exposure
+9. **PM2 cluster mode**: Built-in Node.js load balancer distributes traffic across all CPU cores with zero-downtime reloads
+10. **Lazy maplibre-gl**: Dynamically imported on web only — keeps mobile bundle size smaller
 
 ## License
 

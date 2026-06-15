@@ -1,6 +1,7 @@
 import express, { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../db';
+import { secureLogger } from '../security/logger';
 import { verifyWebhookSignature } from '../payments/razorpay';
 
 const router = Router();
@@ -8,6 +9,7 @@ const router = Router();
 router.post('/razorpay/webhook', express.raw({ type: 'application/json', limit: '50kb' }), async (req, res) => {
   const signature = req.header('x-razorpay-signature');
   if (!signature || !verifyWebhookSignature(req.body as Buffer, signature)) {
+    secureLogger.warn('[Payments] Razorpay webhook rejected: invalid signature');
     return res.status(400).json({ success: false, message: 'Invalid webhook signature' });
   }
 
@@ -22,6 +24,7 @@ router.post('/razorpay/webhook', express.raw({ type: 'application/json', limit: 
       where: { razorpay_payment_id: razorpayPaymentId },
     });
     if (existing) {
+      secureLogger.info(`[Payments] Webhook idempotent skip: ${razorpayPaymentId}`);
       return res.json({ success: true, idempotent: true });
     }
   }
@@ -55,6 +58,7 @@ router.post('/razorpay/webhook', express.raw({ type: 'application/json', limit: 
     });
   });
 
+  secureLogger.info(`[Payments] Webhook processed: ${event.event}, payment: ${razorpayPaymentId}`);
   return res.json({ success: true });
 });
 

@@ -5,6 +5,7 @@ import { prisma } from '../db';
 import { authenticate } from '../common/auth';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 import { validate } from '../security/http';
+import { secureLogger } from '../security/logger';
 
 const pointsRouter = Router();
 pointsRouter.use(authenticate);
@@ -168,6 +169,7 @@ pointsRouter.post('/earn', validate({ body: earnSchema }), async (req: Authentic
     { action, points: String(result.points) },
   );
 
+  secureLogger.info(`[Points] Earn for user ${userId}: ${action} -> +${result.points} pts (${result.multiplier.toFixed(2)}x)${result.tierUpgrade ? ', tier upgrade!' : ''}`);
   return res.json({
     success: true,
     message: `+${result.points} pts — ${EARN_RULES[action].description}`,
@@ -270,6 +272,7 @@ pointsRouter.post('/redeem', validate({ body: redeemSchema }), async (req: Authe
     { rewardId, pointsSpent: String(result.reward.points_cost) },
   );
 
+  secureLogger.info(`[Points] Redeem for user ${userId}: ${result.reward.name} (-${result.reward.points_cost} pts)`);
   return res.json({
     success: true,
     message: `🎉 ${result.reward.name} redeemed successfully!`,
@@ -333,6 +336,7 @@ pointsRouter.post('/convert-to-wallet', validate({ body: convertSchema }), async
     return { walletCredit, newPoints, newWallet };
   });
 
+  secureLogger.info(`[Points] Convert for user ${userId}: ${points} pts -> ₹${result.walletCredit}`);
   return res.json({
     success: true,
     message: `Converted ${points} points to ₹${result.walletCredit}`,
@@ -373,6 +377,7 @@ pointsRouter.get('/ledger', async (req: AuthenticatedRequest, res: Response) => 
     select: { loyalty_points: true, loyalty_tier: true, total_lifetime_points: true, points_cap: true, is_subscribed: true },
   });
 
+  secureLogger.info(`[Points] Ledger for user ${userId}: ${transactions.length} transactions`);
   return res.json({
     success: true,
     transactions,
@@ -554,6 +559,7 @@ pointsRouter.post('/admin/grant', validate({ body: adminGrantSchema }), async (r
     `Admin credited ${points} pts — ${reason}`,
   );
 
+  secureLogger.info(`[Points] Admin grant: ${points} pts -> user ${userId}, reason: ${reason}`);
   return res.json({
     success: true,
     message: `Granted ${points} points to user`,
@@ -604,6 +610,7 @@ pointsRouter.post('/admin/debit', validate({ body: adminDebitSchema }), async (r
     return { txn, newBalance };
   });
 
+  secureLogger.info(`[Points] Admin debit: ${points} pts from user ${userId}, reason: ${reason}`);
   return res.json({
     success: true,
     message: `Debited ${points} points from user`,
@@ -666,6 +673,7 @@ pointsRouter.post('/admin/campaign', validate({ body: campaignSchema }), async (
     }
   }
 
+  secureLogger.info(`[Points] Campaign "${campaignName}": ${successCount}/${userIds.length} users credited ${points} pts`);
   return res.json({ success: true, message: `Campaign applied to ${successCount}/${userIds.length} users`, usersProcessed: successCount });
 });
 
@@ -699,6 +707,7 @@ pointsRouter.get('/admin/users', async (req: AuthenticatedRequest, res: Response
     pointsToNextTier: Math.max(0, TIER_THRESHOLDS[getTier(u.total_lifetime_points + 1)] - u.total_lifetime_points),
   }));
 
+  secureLogger.info(`[Points] Admin users list: ${enriched.length} users`);
   return res.json({ success: true, users: enriched, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
 });
 
