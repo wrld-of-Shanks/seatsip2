@@ -5,6 +5,7 @@ import { prisma } from '../db';
 import { authenticate } from '../common/auth';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 import { validate, audit } from '../security/http';
+import { secureLogger } from '../security/logger';
 import { sendPushToUser } from '../services/pushNotifications';
 
 const router = Router();
@@ -75,6 +76,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
     table_floor: t?.floor,
   }));
 
+  secureLogger.info(`[Reservations] List for user ${req.user.userId}: ${data.length} reservations found`);
   return res.json({ success: true, data });
 });
 
@@ -88,7 +90,10 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
     },
   });
 
-  if (!res_) return res.status(404).json({ success: false, message: 'Reservation not found' });
+  if (!res_) {
+    secureLogger.warn(`[Reservations] Get ${req.params.id}: not found for user ${req.user.userId}`);
+    return res.status(404).json({ success: false, message: 'Reservation not found' });
+  }
   const pre_order_items = JSON.parse(res_.pre_order_items || '[]');
   const { cafe, table, ...rest } = res_;
   return res.json({
@@ -250,9 +255,10 @@ router.post(
         reservationId: String(id),
       });
 
+      secureLogger.info(`[Reservations] Created: ${id} for user ${req.user.userId}, cafe ${cafe_id}, ${date} ${time}`);
       return res.status(201).json({ success: true, data: out });
     } catch (error: unknown) {
-      console.error('Reservation Error:', error);
+      secureLogger.error('[Reservations] Create failed', error);
       return res.status(500).json({
         success: false,
         message: 'Internal server error during reservation',
@@ -306,6 +312,7 @@ router.patch(
     });
     if (!updated) return res.status(404).json({ success: false, message: 'Reservation not found' });
 
+    secureLogger.info(`[Reservations] Pre-order updated for reservation ${req.params.id}, user ${req.user.userId}`);
     const { cafe, table, ...rest } = updated;
     return res.json({
       success: true,
@@ -343,6 +350,7 @@ router.patch('/:id/cancel', async (req: AuthenticatedRequest, res: Response) => 
     },
   });
 
+  secureLogger.info(`[Reservations] Cancelled: ${reservation.id} for user ${req.user.userId}`);
   return res.json({ success: true, message: 'Reservation cancelled' });
 });
 

@@ -1,7 +1,30 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
-import maplibregl, { Map as MapLibreMap, Marker } from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
+
+let _maplibregl: any;
+async function getMaplibregl() {
+  if (!_maplibregl) {
+    const scriptUrl = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
+    const styleUrl = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';
+    if (!document.querySelector(`link[href="${styleUrl}"]`)) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = styleUrl;
+      document.head.appendChild(link);
+    }
+    if (!document.querySelector(`script[src="${scriptUrl}"]`)) {
+      await new Promise<void>((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = scriptUrl;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Failed to load maplibre-gl from CDN'));
+        document.head.appendChild(script);
+      });
+    }
+    _maplibregl = (window as any).maplibregl;
+  }
+  return _maplibregl;
+}
 
 const MAPTILER_KEY = '5qJr4cBxnkaZ1S4BU1Ua';
 const MAP_STYLE = `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`;
@@ -91,7 +114,8 @@ const GALLERY_IMAGES = [
 function setupMarkerClick(
   el: HTMLElement,
   mapContainer: HTMLElement,
-  cafeName: string,
+  map: any | null,
+  restaurant: Restaurant,
   onGalleryOpen?: () => void,
   onGalleryClose?: () => void,
 ) {
@@ -102,85 +126,102 @@ function setupMarkerClick(
   if ((el as any).__ringActive) return;
   (el as any).__ringActive = true;
 
-  // Step 1: Make sure the marker's parent doesn't clip the ring
-  const markerParent = el.parentElement!;
-  markerParent.style.overflow = 'visible';
+  function startRing() {
+    // Step 1: Make sure the marker's parent doesn't clip the ring
+    const markerParent = el.parentElement!;
+    markerParent.style.overflow = 'visible';
 
-  // Step 2: Calculate marker center relative to its parent using
-  // getBoundingClientRect — this accounts for MapLibre's CSS transforms
-  const elRect = el.getBoundingClientRect();
-  const parentRect = markerParent.getBoundingClientRect();
+    // Step 2: Calculate marker center relative to its parent using
+    // getBoundingClientRect — this accounts for MapLibre's CSS transforms
+    const elRect = el.getBoundingClientRect();
+    const parentRect = markerParent.getBoundingClientRect();
 
-  const cx = elRect.left - parentRect.left + elRect.width / 2;
-  const cy = elRect.top - parentRect.top + elRect.height / 2;
+    const cx = elRect.left - parentRect.left + elRect.width / 2;
+    const cy = elRect.top - parentRect.top + elRect.height / 2;
 
-  // Step 3: Size the SVG around the center point so the ring is
-  // perfectly centered over the marker regardless of its map position
-  const SVG_SIZE = 80;
-  const svgLeft = cx - SVG_SIZE / 2;
-  const svgTop  = cy - SVG_SIZE / 2;
+    // Step 3: Size the SVG around the center point so the ring is
+    // perfectly centered over the marker regardless of its map position
+    const SVG_SIZE = 80;
+    const svgLeft = cx - SVG_SIZE / 2;
+    const svgTop  = cy - SVG_SIZE / 2;
 
-  // Step 4: Build the SVG — innerHTML once, no duplicate appends, no
-  // manual createElementNS for circles (avoids wipe bug)
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('width', String(SVG_SIZE));
-  svg.setAttribute('height', String(SVG_SIZE));
-  svg.style.cssText = `
-    position: absolute;
-    top: ${svgTop}px;
-    left: ${svgLeft}px;
-    pointer-events: none;
-    z-index: 99999;
-    overflow: visible;
-  `;
+    // Step 4: Build the SVG — innerHTML once, no duplicate appends, no
+    // manual createElementNS for circles (avoids wipe bug)
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', String(SVG_SIZE));
+    svg.setAttribute('height', String(SVG_SIZE));
+    svg.style.cssText = `
+      position: absolute;
+      top: ${svgTop}px;
+      left: ${svgLeft}px;
+      pointer-events: none;
+      z-index: 99999;
+      overflow: visible;
+    `;
 
-  svg.innerHTML = `
-    <circle cx="40" cy="40" r="${RADIUS}" fill="none"
-      stroke="rgba(255,255,255,0.35)" stroke-width="4"/>
-    <circle id="seatsip-ring-fill"
-      cx="40" cy="40" r="${RADIUS}" fill="none"
-      stroke="#ff7a3d" stroke-width="4" stroke-linecap="round"
-      stroke-dasharray="${CIRCUMFERENCE}"
-      stroke-dashoffset="${CIRCUMFERENCE}"
-      transform="rotate(-90 40 40)"/>
-  `;
+    svg.innerHTML = `
+      <circle cx="40" cy="40" r="${RADIUS}" fill="none"
+        stroke="rgba(255,255,255,0.35)" stroke-width="4"/>
+      <circle id="seatsip-ring-fill"
+        cx="40" cy="40" r="${RADIUS}" fill="none"
+        stroke="#ff7a3d" stroke-width="4" stroke-linecap="round"
+        stroke-dasharray="${CIRCUMFERENCE}"
+        stroke-dashoffset="${CIRCUMFERENCE}"
+        transform="rotate(-90 40 40)"/>
+    `;
 
-  // Step 5: Append SVG as sibling — never wrap or move el
-  markerParent.appendChild(svg);
+    // Step 5: Append SVG as sibling — never wrap or move el
+    markerParent.appendChild(svg);
 
-  // Step 6: Keep the marker button on top of the ring
-  el.style.position = 'relative';
-  el.style.zIndex   = '100000';
+    // Step 6: Keep the marker button on top of the ring
+    el.style.position = 'relative';
+    el.style.zIndex   = '100000';
 
-  const ring = svg.querySelector('#seatsip-ring-fill') as SVGCircleElement | null;
+    const ring = svg.querySelector('#seatsip-ring-fill') as SVGCircleElement | null;
 
-  // Step 7: Animate with rAF — no CSS transitions, no fights with
-  // MapLibre's internal transform handling
-  const startTime = performance.now();
-  const DURATION  = 1400;
+    // Step 7: Animate with rAF — no CSS transitions, no fights with
+    // MapLibre's internal transform handling
+    const startTime = performance.now();
+    const DURATION  = 1400;
 
-  function animate(now: number) {
-    const progress = Math.min((now - startTime) / DURATION, 1);
+    function animate(now: number) {
+      const progress = Math.min((now - startTime) / DURATION, 1);
 
-    ring?.setAttribute(
-      'stroke-dashoffset',
-      String(CIRCUMFERENCE * (1 - progress)),
-    );
+      ring?.setAttribute(
+        'stroke-dashoffset',
+        String(CIRCUMFERENCE * (1 - progress)),
+      );
 
-    if (progress < 1) {
-      requestAnimationFrame(animate);
-    } else {
-      // Brief pause so the user sees the completed ring
-      setTimeout(() => {
-        svg.parentNode?.removeChild(svg);
-        el.style.zIndex = '';
-        (el as any).__ringActive = false;
-        openGallery(mapContainer, cafeName, onGalleryOpen, onGalleryClose);
-      }, 80);
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        // Brief pause so the user sees the completed ring
+        setTimeout(() => {
+          svg.parentNode?.removeChild(svg);
+          el.style.zIndex = '';
+          (el as any).__ringActive = false;
+          openGallery(mapContainer, restaurant.name, onGalleryOpen, onGalleryClose);
+        }, 80);
+      }
     }
+
+    requestAnimationFrame(animate);
   }
 
-  requestAnimationFrame(animate);
+  // Fly to the marker first, then start the ring animation
+  if (map) {
+    map.flyTo({
+      center: [restaurant.lng, restaurant.lat],
+      zoom: 16.2,
+      pitch: 62,
+      bearing: 10,
+      duration: 900,
+      essential: true,
+    });
+    map.once('moveend', startRing);
+  } else {
+    startRing();
+  }
 }
 
 /**
@@ -356,6 +397,7 @@ function createMarkerElement(
   color: string,
   selected: boolean,
   mapContainer: HTMLElement | null,
+  map: any | null,
   onSelect: (restaurant: Restaurant) => void,
   onGalleryOpen?: () => void,
   onGalleryClose?: () => void,
@@ -382,7 +424,9 @@ function createMarkerElement(
   element.textContent = markerLabel(restaurant.category);
 
   element.addEventListener('click', () => {
-    onSelect(restaurant);
+    if (mapContainer) {
+      setupMarkerClick(element, mapContainer, map, restaurant, onGalleryOpen, onGalleryClose);
+    }
   });
 
   return element;
@@ -390,7 +434,7 @@ function createMarkerElement(
 
 const MapCanvas = forwardRef<MapCanvasHandle, Props>(({ restaurants, city, selectedId, pinColors, onSelect, onGalleryOpen, onGalleryClose }, ref) => {
   const containerRef = useRef<any>(null);
-  const mapRef = useRef<MapLibreMap | null>(null);
+  const mapRef = useRef<any | null>(null);
   const markersRef = useRef<Marker[]>([]);
   const onSelectRef = useRef(onSelect);
   const onGalleryOpenRef = useRef(onGalleryOpen);
@@ -404,39 +448,46 @@ const MapCanvas = forwardRef<MapCanvasHandle, Props>(({ restaurants, city, selec
     const container = containerRef.current;
     if (!container || mapRef.current) return;
 
-    container.style.width = '100%';
-    container.style.height = '100%';
-    container.style.position = 'absolute';
-    container.style.inset = '0';
+    let cleanupFns: (() => void)[] = [];
+    const addCleanup = (fn: () => void) => { cleanupFns.push(fn); };
 
-    const controlStyle = document.createElement('style');
-    controlStyle.textContent = `
-      .maplibregl-ctrl-top-right {
-        top: 134px;
-        right: 12px;
-      }
-      .maplibregl-ctrl-bottom-right {
-        bottom: 228px;
-        right: 12px;
-      }
-      .maplibregl-ctrl button {
-        width: 34px;
-        height: 34px;
-      }
-    `;
-    document.head.appendChild(controlStyle);
+    (async () => {
+      const ml = await getMaplibregl();
 
-    const map = new maplibregl.Map({
-      container,
-      style: MAP_STYLE,
-      center: [city.lng, city.lat],
-      zoom: Math.max(DEFAULT_ZOOM, city.zoom_level || DEFAULT_ZOOM),
-      pitch: 60,
-      bearing: -20,
-      attributionControl: false,
-    });
+      container.style.width = '100%';
+      container.style.height = '100%';
+      container.style.position = 'absolute';
+      container.style.inset = '0';
 
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+      const controlStyle = document.createElement('style');
+      controlStyle.textContent = `
+        .maplibregl-ctrl-top-right {
+          top: 134px;
+          right: 12px;
+        }
+        .maplibregl-ctrl-bottom-right {
+          bottom: 228px;
+          right: 12px;
+        }
+        .maplibregl-ctrl button {
+          width: 34px;
+          height: 34px;
+        }
+      `;
+      document.head.appendChild(controlStyle);
+      addCleanup(() => controlStyle.remove());
+
+      const map = new ml.Map({
+        container,
+        style: MAP_STYLE,
+        center: [city.lng, city.lat],
+        zoom: Math.max(DEFAULT_ZOOM, city.zoom_level || DEFAULT_ZOOM),
+        pitch: 60,
+        bearing: -20,
+        attributionControl: false,
+      });
+
+      map.addControl(new ml.NavigationControl({ visualizePitch: true }), 'top-right');
 
     map.on('load', () => {
       if (map.getSource('openmaptiles') && !map.getLayer(BUILDINGS_LAYER.id)) {
@@ -471,15 +522,16 @@ const MapCanvas = forwardRef<MapCanvasHandle, Props>(({ restaurants, city, selec
     window.setTimeout(resizeMap, 250);
     const resizeObserver = new ResizeObserver(resizeMap);
     resizeObserver.observe(container);
-
-    return () => {
-      resizeObserver.disconnect();
-      controlStyle.remove();
+    addCleanup(() => resizeObserver.disconnect());
+    addCleanup(() => {
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current = [];
       map.remove();
       mapRef.current = null;
-    };
+    });
+  })();
+
+    return () => { cleanupFns.forEach(fn => fn()); };
   }, []);
 
   useEffect(() => {
@@ -497,25 +549,30 @@ const MapCanvas = forwardRef<MapCanvasHandle, Props>(({ restaurants, city, selec
   }, [city]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
+    (async () => {
+      const map = mapRef.current;
+      if (!map) return;
 
-    markersRef.current.forEach((marker) => marker.remove());
-    markersRef.current = restaurants.map((restaurant) => {
-      const element = createMarkerElement(
-        restaurant,
-        pinColors[restaurant.category],
-        restaurant.id === selectedId,
-        containerRef.current,
-        onSelectRef.current,
-        onGalleryOpenRef.current,
-        onGalleryCloseRef.current,
-      );
+      const ml = await getMaplibregl();
 
-      return new maplibregl.Marker({ element, anchor: 'center' })
-        .setLngLat([restaurant.lng, restaurant.lat])
-        .addTo(map);
-    });
+      markersRef.current.forEach((marker) => marker.remove());
+      markersRef.current = restaurants.map((restaurant) => {
+        const element = createMarkerElement(
+          restaurant,
+          pinColors[restaurant.category],
+          restaurant.id === selectedId,
+          containerRef.current,
+          mapRef.current,
+          onSelectRef.current,
+          onGalleryOpenRef.current,
+          onGalleryCloseRef.current,
+        );
+
+        return new ml.Marker({ element, anchor: 'center' })
+          .setLngLat([restaurant.lng, restaurant.lat])
+          .addTo(map);
+      });
+    })();
   }, [restaurants, selectedId, pinColors]);
 
   useImperativeHandle(ref, () => ({

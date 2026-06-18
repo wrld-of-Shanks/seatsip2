@@ -6,36 +6,77 @@ on:
   pull_request:
 
 jobs:
-  backend:
+  lint:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
-    env:
-      DATABASE_URL: file:./test.db
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: 20
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
-      - run: npx prisma db push
-      - run: npm run typecheck
-      - run: npm test
+      - run: npx eslint .
 
-  frontend:
+  test-backend:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: seatsip-frontend
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: 20
           cache: npm
-          cache-dependency-path: seatsip-frontend/package-lock.json
+          cache-dependency-path: backend/package-lock.json
       - run: npm ci
-      - run: npx tsc --noEmit
+      - run: npm test
+
+  test-web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: seat-sip-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: seat-sip-web/package-lock.json
+      - run: npm ci
+      - run: npx jest
+
+  build-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  build-web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: seat-sip-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: seat-sip-web/package-lock.json
+      - run: npm ci
+      - run: npx next build

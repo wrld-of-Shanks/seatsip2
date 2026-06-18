@@ -28,23 +28,17 @@ import {
   setRefreshTokenCookie,
   useBrowserRefreshCookie,
 } from '../common/refreshCookie';
-import { generateAndSendOtp, verifyOtp } from '../services/otpService';
+import { generateAndSendOtpWithChannel, verifyOtp } from '../services/otpService';
 import os from 'os';
+import { redisClient } from '../security/rateLimit';
 
 const router = Router();
 
-// In-memory sessions store mapping ID to coordinates and timestamp
-const mobileLocationSessions = new Map<string, { latitude: number | null; longitude: number | null; createdAt: number }>();
+const SESSION_TTL = 300; // 5 minutes in seconds
 
-// Clean up expired sessions every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, session] of mobileLocationSessions.entries()) {
-    if (now - session.createdAt > 5 * 60 * 1000) {
-      mobileLocationSessions.delete(id);
-    }
-  }
-}, 5 * 60 * 1000);
+function sessionKey(id: string): string {
+  return `mobile_session:${id}`;
+}
 
 function getLocalIpAddress(): string {
   const interfaces = os.networkInterfaces();
@@ -71,12 +65,15 @@ const submitLocationSchema = z.object({
 router.post('/mobile-location/session', async (req, res) => {
   try {
     const sessionId = uuidv4();
-    mobileLocationSessions.set(sessionId, {
+    const data = JSON.stringify({
       latitude: null,
       longitude: null,
       source: null,
       createdAt: Date.now(),
-    } as any);
+    });
+    if (redisClient) {
+      await redisClient.set(sessionKey(sessionId), data, { EX: SESSION_TTL });
+    }
     const ip = getLocalIpAddress();
     return res.status(201).json({
       success: true,
@@ -92,7 +89,11 @@ router.post('/mobile-location/session', async (req, res) => {
 // Get coordinates for desktop polling
 router.get('/mobile-location/session/:id', async (req, res) => {
   const { id } = req.params;
-  const session = mobileLocationSessions.get(id);
+  let session: { latitude: number | null; longitude: number | null; source: string | null; createdAt: number } | null = null;
+  if (redisClient) {
+    const raw = await redisClient.get(sessionKey(id));
+    if (raw) session = JSON.parse(raw);
+  }
   if (!session) {
     return res.status(404).json({ success: false, message: 'Session not found or expired' });
   }
@@ -100,7 +101,7 @@ router.get('/mobile-location/session/:id', async (req, res) => {
     success: true,
     latitude: session.latitude,
     longitude: session.longitude,
-    source: (session as any).source || null,
+    source: session.source || null,
   });
 });
 
@@ -111,15 +112,21 @@ router.post(
   async (req, res) => {
     try {
       const { id } = req.params;
-      const session = mobileLocationSessions.get(id);
+      let session: { latitude: number | null; longitude: number | null; source: string | null; createdAt: number } | null = null;
+      if (redisClient) {
+        const raw = await redisClient.get(sessionKey(id));
+        if (raw) session = JSON.parse(raw);
+      }
       if (!session) {
         return res.status(404).json({ success: false, message: 'Session not found or expired' });
       }
       const { latitude, longitude, source } = req.body as z.infer<typeof submitLocationSchema>;
       session.latitude = latitude;
       session.longitude = longitude;
-      (session as any).source = source || null;
-      mobileLocationSessions.set(id, session);
+      session.source = source || null;
+      if (redisClient) {
+        await redisClient.set(sessionKey(id), JSON.stringify(session), { EX: SESSION_TTL });
+      }
       return res.json({
         success: true,
         message: 'Location synchronized successfully',
@@ -164,6 +171,7 @@ const verifyPasswordSchema = z.object({ password: z.string().min(1).max(128) });
 
 const requestForgotOtpSchema = z.object({
   email: z.string().email({ message: 'Enter a valid email address' }).max(254).transform((email) => email.toLowerCase()),
+  channel: z.enum(['email', 'phone']).optional().default('email'),
 });
 
 const resetPasswordWithOtpSchema = z.object({
@@ -211,7 +219,7 @@ function userPublicFields(u: {
   email: string;
   phone: string | null;
   role: string;
-  wallet_balance: number;
+  wallet_balance: any;
   loyalty_points: number;
   loyalty_tier: string;
   avatar: string | null;
@@ -246,15 +254,18 @@ router.get(
   authRegisterLimiter,
   validate({ query: checkEmailQuerySchema }),
   async (req, res) => {
+    let email = '';
     try {
-      const { email } = req.query as unknown as z.infer<typeof checkEmailQuerySchema>;
+      const { email: rawEmail } = req.query as unknown as z.infer<typeof checkEmailQuerySchema>;
+      email = rawEmail;
       const user = await prisma.user.findUnique({
         where: { email },
         select: { id: true },
       });
+      secureLogger.info(`[Auth] Email availability check: ${email} -> ${!user ? 'available' : 'taken'}`);
       return res.json({ available: !user });
     } catch (err: unknown) {
-      secureLogger.error('check email availability failed', err);
+      secureLogger.error(`[Auth] Check email availability failed for ${email}`, err);
       return res.status(500).json({ success: false, message: 'Failed to check email availability' });
     }
   }
@@ -264,10 +275,16 @@ router.post('/register', authRegisterLimiter, validate({ body: registerSchema })
   try {
     const { name, email, password, phone } = req.body as z.infer<typeof registerSchema>;
     const passwordError = validatePasswordStrength(password, [name, email]);
-    if (passwordError) return res.status(400).json({ success: false, message: passwordError });
+    if (passwordError) {
+      secureLogger.warn(`[Auth] Registration rejected for ${email}: password strength check failed`);
+      return res.status(400).json({ success: false, message: passwordError });
+    }
 
     const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
-    if (existing) return res.status(409).json({ success: false, message: 'Email already registered' });
+    if (existing) {
+      secureLogger.warn(`[Auth] Registration rejected for ${email}: email already registered`);
+      return res.status(409).json({ success: false, message: 'Email already registered' });
+    }
 
     const passwordHash = await bcrypt.hash(password, 12);
     const userId = uuidv4();
@@ -305,6 +322,7 @@ router.post('/register', authRegisterLimiter, validate({ body: registerSchema })
     });
 
     const payload = authSuccessPayload(userPublicFields(user!) as Record<string, unknown>, tokens.accessToken, tokens.refreshToken);
+    secureLogger.info(`[Auth] Registration successful: ${email} (user: ${userId})`);
     if (useBrowserRefreshCookie(req as Request)) {
       setRefreshTokenCookie(res, tokens.refreshToken);
       return res.status(201).json({
@@ -320,7 +338,7 @@ router.post('/register', authRegisterLimiter, validate({ body: registerSchema })
     if (code === 'P2002') {
       return res.status(409).json({ success: false, message: 'Email already registered' });
     }
-    secureLogger.error('registration failed', err);
+    secureLogger.error('[Auth] Registration failed', err);
     return res.status(500).json({ success: false, message: 'Registration failed' });
   }
 });
@@ -363,7 +381,7 @@ router.post(
             phone: body.phone,
             password_hash: passwordHash,
             role: 'CAFE_OWNER',
-            is_active: 0,
+            is_active: false,
             auth_provider: 'owner_pending',
             government_id: body.governmentId,
             business_license: body.businessLicense || null,
@@ -386,7 +404,7 @@ router.post(
             owner_id: ownerId,
             image_url: body.cafePhotos?.[0] || null,
             images: JSON.stringify(body.cafePhotos || []),
-            is_active: 0,
+            is_active: false,
             open_time: openTime,
             close_time: closeTime,
             tags: JSON.stringify([
@@ -455,7 +473,7 @@ router.post(
         }
         user = await prisma.user.findUnique({ where: { id: userId } });
       } else {
-        if (user.is_active !== 1) {
+        if (!user.is_active) {
           return res.status(403).json({ success: false, message: 'Account disabled' });
         }
         if (user.google_id && user.google_id !== profile.googleId) {
@@ -489,25 +507,27 @@ router.post(
       const payload = authSuccessPayload(safeUser, tokens.accessToken, tokens.refreshToken);
       if (useBrowserRefreshCookie(req as Request)) {
         setRefreshTokenCookie(res, tokens.refreshToken);
-        return res.json({
-          success: true,
-          token: tokens.accessToken,
-          user: payload.user,
-          data: { user: payload.user, accessToken: tokens.accessToken },
-        });
-      }
-      return res.json(payload);
-    } catch (err: unknown) {
-      secureLogger.error('google auth failed', err);
-      return res.status(401).json({ success: false, message: (err as Error)?.message || 'Google authentication failed' });
+      secureLogger.info(`[Auth] Google sign-in successful: ${profile.email} (user: ${user!.id})`);
+      return res.json({
+        success: true,
+        token: tokens.accessToken,
+        user: payload.user,
+        data: { user: payload.user, accessToken: tokens.accessToken },
+      });
     }
+    secureLogger.info(`[Auth] Google sign-in successful: ${profile.email} (user: ${user!.id})`);
+    return res.json(payload);
+  } catch (err: unknown) {
+    secureLogger.error('[Auth] Google authentication failed', err);
+    return res.status(401).json({ success: false, message: (err as Error)?.message || 'Google authentication failed' });
+  }
   }
 );
 
 router.post('/login', authLoginLimiter, validate({ body: loginSchema }), audit('LOGIN', 'auth'), async (req, res) => {
   try {
     const { email, password } = req.body as z.infer<typeof loginSchema>;
-    const user = await prisma.user.findFirst({ where: { email, is_active: 1 } });
+    const user = await prisma.user.findFirst({ where: { email, is_active: true } });
 
     if (!user) {
       const inactiveOwner = await prisma.user.findUnique({
@@ -516,6 +536,7 @@ router.post('/login', authLoginLimiter, validate({ body: loginSchema }), audit('
       });
       if (inactiveOwner?.role === 'CAFE_OWNER') {
         const status = inactiveOwner.auth_provider === 'owner_rejected' ? 'REJECTED' : 'PENDING_APPROVAL';
+        secureLogger.warn(`[Auth] Login rejected: ${email} - cafe owner status: ${status}`);
         return res.status(403).json({
           success: false,
           status,
@@ -525,16 +546,19 @@ router.post('/login', authLoginLimiter, validate({ body: loginSchema }), audit('
         });
       }
       await recordFailedLogin(email);
+      secureLogger.warn(`[Auth] Login failed: ${email} - user not found or inactive`);
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     if (user.lockout_until && user.lockout_until > new Date()) {
+      secureLogger.warn(`[Auth] Login rejected: ${email} - account locked until ${user.lockout_until}`);
       return res.status(423).json({ success: false, message: 'Account temporarily locked', lockoutUntil: user.lockout_until });
     }
 
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       const retryAfterSeconds = await recordFailedLogin(email);
+      secureLogger.warn(`[Auth] Login failed: ${email} - invalid password`);
       return res.status(401).json({ success: false, message: 'Invalid credentials', retryAfterSeconds: retryAfterSeconds || undefined });
     }
 
@@ -542,6 +566,7 @@ router.post('/login', authLoginLimiter, validate({ body: loginSchema }), audit('
     const tokens = generateTokens({ userId: user.id, email: user.email, role: user.role as 'USER' | 'ADMIN' | 'CAFE_OWNER' });
     await storeRefreshToken(prisma, user.id, tokens.refreshToken, tokens.familyId);
 
+    secureLogger.info(`[Auth] Login successful: ${email} (user: ${user.id}, role: ${user.role})`);
     const { password_hash: _p, ...safeUser } = user;
     const payload = authSuccessPayload(safeUser as Record<string, unknown>, tokens.accessToken, tokens.refreshToken);
     if (useBrowserRefreshCookie(req as Request)) {
@@ -555,7 +580,7 @@ router.post('/login', authLoginLimiter, validate({ body: loginSchema }), audit('
     }
     return res.json(payload);
   } catch (err) {
-    secureLogger.error('login failed', err);
+    secureLogger.error('[Auth] Login failed with error', err);
     return res.status(500).json({ success: false, message: 'Login failed' });
   }
 });
@@ -588,7 +613,7 @@ router.post('/refresh', authRefreshLimiter, validate({ body: refreshBodySchema }
   }
 
   const user = await prisma.user.findFirst({
-    where: { id: storedToken.user_id, is_active: 1 },
+    where: { id: storedToken.user_id, is_active: true },
     select: { id: true, email: true, role: true },
   });
   if (!user) return res.status(401).json({ success: false, message: 'User not found' });
@@ -602,6 +627,7 @@ router.post('/refresh', authRefreshLimiter, validate({ body: refreshBodySchema }
     await storeRefreshToken(tx, user.id, tokens.refreshToken, tokens.familyId);
   });
 
+  secureLogger.info(`[Auth] Token refreshed for user ${user.id}`);
   if (useBrowserRefreshCookie(req as Request)) {
     setRefreshTokenCookie(res, tokens.refreshToken);
     return res.json({ success: true, data: { accessToken: tokens.accessToken } });
@@ -631,6 +657,7 @@ router.post('/logout', authenticate, validate({ body: logoutSchema }), audit('LO
     await revokeTok(tx, cookieTok);
   });
   clearRefreshTokenCookie(res);
+  secureLogger.info(`[Auth] Logout successful for user ${req.user.userId}`);
   return res.json({ success: true, message: 'Logged out' });
 });
 
@@ -651,7 +678,11 @@ router.get('/me', authenticate, audit('ME', 'auth'), async (req: AuthenticatedRe
       created_at: true,
     },
   });
-  if (!dbUser) return res.status(404).json({ success: false, message: 'User not found' });
+  if (!dbUser) {
+    secureLogger.warn(`[Auth] GET /me: user ${req.user.userId} not found`);
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+  secureLogger.info(`[Auth] Profile retrieved for user ${req.user.userId}`);
   return res.json({ success: true, data: dbUser });
 });
 
@@ -675,9 +706,10 @@ router.post(
       }
       const { password } = req.body as z.infer<typeof verifyPasswordSchema>;
       const valid = await bcrypt.compare(password, row.password_hash);
+      secureLogger.info(`[Auth] Password verification for user ${req.user.userId}: ${valid ? 'correct' : 'incorrect'}`);
       return res.json({ success: true, data: { valid } });
     } catch (err) {
-      secureLogger.error('verify-password failed', err);
+      secureLogger.error('[Auth] Password verification failed', err);
       return res.status(500).json({ success: false, message: 'Verification failed' });
     }
   }
@@ -723,7 +755,7 @@ router.post(
       const graceEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
       await prisma.user.update({
         where: { id: userId },
-        data: { is_active: 0, deletion_scheduled_at: graceEnd },
+        data: { is_active: false, deletion_scheduled_at: graceEnd },
       });
 
       const row = await prisma.user.findUnique({
@@ -731,6 +763,7 @@ router.post(
         select: { deletion_scheduled_at: true },
       });
 
+      secureLogger.info(`[Auth] Account deletion scheduled for user ${userId}, grace until ${row?.deletion_scheduled_at}`);
       return res.json({
         success: true,
         data: {
@@ -740,7 +773,7 @@ router.post(
         },
       });
     } catch (err: unknown) {
-      secureLogger.error('delete account failed', err);
+      secureLogger.error('[Auth] Delete account failed', err);
       return res.status(500).json({ success: false, message: 'Could not process account deletion' });
     }
   }
@@ -758,10 +791,10 @@ router.post(
         data: { terms_accepted_at: new Date() },
       });
 
-      secureLogger.info(`User ${userId} accepted terms`);
+      secureLogger.info(`[Auth] Terms accepted by user ${userId}`);
       return res.json({ success: true, message: 'Terms accepted and recorded' });
     } catch (err: unknown) {
-      secureLogger.error('accept terms failed', err);
+      secureLogger.error('[Auth] Accept terms failed', err);
       return res.status(500).json({ success: false, message: 'Could not record terms acceptance' });
     }
   }
@@ -811,12 +844,13 @@ router.post(
 
       await prisma.user.update({
         where: { id: user.id },
-        data: { is_active: 1, deletion_scheduled_at: null },
+        data: { is_active: true, deletion_scheduled_at: null },
       });
 
+      secureLogger.info(`[Auth] Account deletion cancelled for user ${user.id}`);
       return res.json({ success: true, message: 'Account deletion cancelled. You can sign in again.' });
     } catch (err: unknown) {
-      secureLogger.error('cancel account deletion failed', err);
+      secureLogger.error('[Auth] Cancel account deletion failed', err);
       return res.status(500).json({ success: false, message: 'Could not cancel account deletion' });
     }
   }
@@ -828,20 +862,25 @@ router.post(
   audit('FORGOT_PASSWORD_REQUEST', 'auth'),
   async (req, res) => {
     try {
-      const { email } = req.body as z.infer<typeof requestForgotOtpSchema>;
-      const user = await prisma.user.findUnique({ where: { email }, select: { id: true, is_active: true } });
-      
+      const { email, channel } = req.body as z.infer<typeof requestForgotOtpSchema>;
+      const user = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true, is_active: true, phone: true },
+      });
+
       // For security, always return generic success message to prevent user enumeration
-      if (user && user.is_active === 1) {
-        await generateAndSendOtp(email);
+      if (user && user.is_active) {
+        const phone = channel === 'phone' ? user.phone : null;
+        await generateAndSendOtpWithChannel(email, phone, channel);
       }
-      
+
+      secureLogger.info(`[Auth] Forgot password OTP requested for ${email} via ${channel}`);
       return res.json({
         success: true,
-        message: 'If this email is registered, we have sent a 6-digit OTP code to verify.',
+        message: `If this email is registered, we have sent a 6-digit OTP code via ${channel}.`,
       });
     } catch (err: unknown) {
-      secureLogger.error('forgot password request failed', err);
+      secureLogger.error('[Auth] Forgot password request failed', err);
       return res.status(500).json({ success: false, message: 'Failed to process request' });
     }
   }
@@ -856,7 +895,7 @@ router.post(
       const { email, otp, password } = req.body as z.infer<typeof resetPasswordWithOtpSchema>;
       
       const user = await prisma.user.findUnique({ where: { email }, select: { id: true, name: true, is_active: true } });
-      if (!user || user.is_active !== 1) {
+      if (!user || !user.is_active) {
         return res.status(400).json({ success: false, message: 'Invalid email or verification code' });
       }
       
@@ -883,12 +922,13 @@ router.post(
         });
       });
       
+      secureLogger.info(`[Auth] Password reset successful for ${email}`);
       return res.json({
         success: true,
         message: 'Password reset successfully. You can now log in with your new password.',
       });
     } catch (err: unknown) {
-      secureLogger.error('forgot password reset failed', err);
+      secureLogger.error('[Auth] Forgot password reset failed', err);
       return res.status(500).json({ success: false, message: 'Failed to reset password' });
     }
   }

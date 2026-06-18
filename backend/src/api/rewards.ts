@@ -5,6 +5,7 @@ import { prisma } from '../db';
 import { authenticate } from '../common/auth';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 import { validate } from '../security/http';
+import { secureLogger } from '../security/logger';
 
 const rewardsRouter = Router();
 // Sync trigger for Prisma types
@@ -46,7 +47,7 @@ rewardsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
   if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
   const rewards = await prisma.reward.findMany({
-    where: { is_active: 1 },
+    where: { is_active: true },
     orderBy: { points_cost: 'asc' },
   });
 
@@ -71,6 +72,7 @@ rewardsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
     platinum: annotated.filter((r) => r.tier_required.toLowerCase() === 'platinum'),
   };
 
+  secureLogger.info(`[Rewards] List for user ${userId}: ${annotated.length} rewards available`);
   res.json({
     success: true,
     user: {
@@ -96,7 +98,7 @@ rewardsRouter.post('/:id/redeem', async (req: AuthenticatedRequest, res: Respons
       where: { id: rewardId },
     });
 
-    if (!reward || reward.is_active === 0) {
+    if (!reward || !reward.is_active) {
       throw new Error('Reward not found');
     }
 
@@ -157,6 +159,7 @@ rewardsRouter.post('/:id/redeem', async (req: AuthenticatedRequest, res: Respons
     return { reward, user: updatedUser };
   });
 
+  secureLogger.info(`[Rewards] Redeemed ${rewardId} for user ${userId}: ${result.reward.name} (-${result.reward.points_cost} pts)`);
   res.json({
     success: true,
     message: `🎉 ${result.reward.name} redeemed successfully!`,
@@ -239,6 +242,7 @@ rewardsRouter.post('/earn', validate({ body: earnActionSchema }), async (req: Au
     return { updatedUser, tierUpgrade };
   });
 
+  secureLogger.info(`[Rewards] Earn for user ${userId}: ${action} -> +${rule.points} pts${result.tierUpgrade ? ', tier upgrade!' : ''}`);
   res.json({
     success: true,
     message: `+${rule.points} pts — ${rule.description}`,
@@ -313,13 +317,14 @@ rewardsRouter.post('/purchase-tier', validate({ body: purchaseTierSchema }), asy
           type: 'PURCHASE',
           amount: amount,
           description: `${newTier.toUpperCase()} Membership Purchase (${paymentMethod})`,
-          balance_after: user.wallet_balance,
+          balance_after: Number(user.wallet_balance),
         },
       });
 
       return updatedUser;
     });
 
+    secureLogger.info(`[Rewards] Purchase tier for user ${userId}: ${tierId} via ${paymentMethod}`);
     return res.json({
       success: true,
       message: `Successfully purchased ${tierId.toUpperCase()} membership!`,
@@ -332,6 +337,7 @@ rewardsRouter.post('/purchase-tier', validate({ body: purchaseTierSchema }), asy
     });
   } catch (error: any) {
     console.error('Failed to purchase tier:', error);
+    secureLogger.error(`[Rewards] Purchase tier failed for user ${userId}`, error);
     return res.status(500).json({ success: false, message: error.message || 'Payment processing failed' });
   }
 });

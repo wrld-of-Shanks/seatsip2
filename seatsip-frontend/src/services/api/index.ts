@@ -25,15 +25,14 @@ const envApiUrl = readProcessEnv().EXPO_PUBLIC_API_URL?.trim() || '';
 const extraApiUrl = (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl?.trim() || '';
 
 export const API_BASE_URL =
-  Platform.OS === 'web'
+  envApiUrl || extraApiUrl ||
+  (Platform.OS === 'web'
     ? (isDev ? 'http://localhost:3000/api/v1' : 'https://api.seatsip.in/api/v1')
-    : envApiUrl ||
-      extraApiUrl ||
-      (isDev
+    : (isDev
         ? Platform.OS === 'android'
           ? 'http://10.0.2.2:3000/api/v1'
           : 'http://localhost:3000/api/v1'
-        : 'https://api.seatsip.in/api/v1');
+        : 'https://api.seatsip.in/api/v1'));
 
 /** SSL pinning only in production native builds (dev uses plain axios; pinning needs server leaf cert in native bundle). */
 const useSslPinning = Platform.OS !== 'web' && !isDev;
@@ -285,6 +284,21 @@ export const exploreCategoriesApi = {
 // ===== Menu Items =====
 export const menuApi = {
   list: (params?: { cafeId?: string; exploreCategory?: string }) => api.get('/menu/items', { params }),
+};
+
+// ===== Subscriptions =====
+export const subscriptionsApi = {
+  status: () => api.get('/subscriptions/status'),
+  activate: (data: {
+    planType: 'MONTHLY' | 'YEARLY';
+    paymentMethod: 'WALLET' | 'RAZORPAY';
+    razorpay_payment_id?: string;
+    razorpay_order_id?: string;
+    razorpay_signature?: string;
+  }) => api.post('/subscriptions/activate', data),
+  cancel: () => api.post('/subscriptions/cancel'),
+  autoRenewCheck: () => api.post('/subscriptions/auto-renew-check'),
+  createOrder: (planType: 'MONTHLY' | 'YEARLY') => api.post('/subscriptions/create-order', { planType }),
 };
 
 export default api;

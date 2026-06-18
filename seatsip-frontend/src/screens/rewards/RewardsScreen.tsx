@@ -17,7 +17,7 @@ import Svg, { Path, Polygon, Circle } from 'react-native-svg';
 import { useNavigation } from '@react-navigation/native';
 import AppIcon from '../../components/ui/AppIcon';
 import { useAuth } from '../../context/AuthContext';
-import { usersApi, rewardsApi } from '../../services/api';
+import { usersApi, rewardsApi, subscriptionsApi } from '../../services/api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const BROWN = '#6D3914';
@@ -298,6 +298,31 @@ export default function RewardsScreen() {
   
   const [activity, setActivity] = useState<{ id: string; title: string; subtitle: string; amount: string }[]>([]);
   
+  // Subscription State
+  const [subStatus, setSubStatus] = useState<{
+    isSubscribed: boolean;
+    subscription: any;
+    subscriptionPrice: number;
+    walletBalance: number;
+  } | null>(null);
+  const [showSubModal, setShowSubModal] = useState(false);
+  const [subPlanType, setSubPlanType] = useState<'MONTHLY' | 'YEARLY'>('MONTHLY');
+  const [subPaying, setSubPaying] = useState(false);
+  const [subError, setSubError] = useState('');
+
+  async function loadSubscriptionStatus() {
+    try {
+      const res = await subscriptionsApi.status();
+      setSubStatus(res.data);
+    } catch {
+      // silent
+    }
+  }
+
+  useEffect(() => {
+    loadSubscriptionStatus();
+  }, []);
+
   // Checkout & Payment State
   const [selectedTier, setSelectedTier] = useState<typeof TIERS[0] | null>(null);
   const [checkoutAmount, setCheckoutAmount] = useState<number>(0);
@@ -456,6 +481,43 @@ export default function RewardsScreen() {
     }
   };
 
+  const handleSubscribe = async () => {
+    setSubPaying(true);
+    setSubError('');
+    try {
+      const price = subPlanType === 'YEARLY' ? Math.round(199 * 12 * 0.85) : 199;
+      if ((subStatus?.walletBalance ?? 0) < price) {
+        setSubError(`Insufficient wallet balance. Need ₹${price}, have ₹${Math.floor(subStatus?.walletBalance ?? 0)}`);
+        setSubPaying(false);
+        return;
+      }
+      const res = await subscriptionsApi.activate({
+        planType: subPlanType,
+        paymentMethod: 'WALLET',
+      });
+      if (res.data?.success) {
+        setShowSubModal(false);
+        setSubPaying(false);
+        await loadSubscriptionStatus();
+      } else {
+        setSubError(res.data?.message || 'Subscription activation failed');
+        setSubPaying(false);
+      }
+    } catch (err: any) {
+      setSubError(err.response?.data?.message || err.message || 'Activation failed');
+      setSubPaying(false);
+    }
+  };
+
+  const handleCancelSubscription = async () => {
+    try {
+      await subscriptionsApi.cancel();
+      await loadSubscriptionStatus();
+    } catch {
+      // silent
+    }
+  };
+
   return (
     <ImageBackground 
       source={require('../../assets/images/app_bg.png')} 
@@ -494,6 +556,52 @@ export default function RewardsScreen() {
               onPress={() => handleTierSelect(tier)}
             />
           ))}
+
+          {/* ── Subscription Card ── */}
+          <Text style={styles.sectionTitle}>Subscription</Text>
+          <View style={styles.earnCard}>
+            {subStatus?.isSubscribed ? (
+              <View style={{ padding: 18 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                  <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: '#4CAF50', marginRight: 8 }} />
+                  <Text style={{ fontSize: 16, fontWeight: '800', color: '#1A1A1A' }}>Active</Text>
+                </View>
+                <Text style={{ fontSize: 13, color: '#666', marginBottom: 4 }}>
+                  Plan: {subStatus.subscription?.planType ?? 'MONTHLY'} | 
+                  Expires: {subStatus.subscription?.expiresAt ? new Date(subStatus.subscription.expiresAt).toLocaleDateString() : 'N/A'}
+                </Text>
+                <Text style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+                  Auto-Renew: {subStatus.subscription?.autoRenew ? 'On' : 'Off'}
+                  {subStatus.subscription?.daysRemaining > 0 ? ` | ${subStatus.subscription.daysRemaining} days left` : ''}
+                </Text>
+                <TouchableOpacity
+                  style={{ backgroundColor: '#D32F2F', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }}
+                  onPress={handleCancelSubscription}
+                  activeOpacity={0.8}
+                >
+                  <Text style={{ color: '#FFF', fontWeight: '700', fontSize: 14 }}>Cancel Auto-Renew</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={{ padding: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                onPress={() => setShowSubModal(true)}
+                activeOpacity={0.7}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 16, fontWeight: '800', color: '#1A1A1A', marginBottom: 4 }}>
+                    Get SeatSip Monthly
+                  </Text>
+                  <Text style={{ fontSize: 13, color: '#666', lineHeight: 18 }}>
+                    1.5x points • No point expiry • Priority redemption • Subscriber-only promos
+                  </Text>
+                </View>
+                <View style={{ backgroundColor: '#6D3914', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 }}>
+                  <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 14 }}>₹199/mo</Text>
+                </View>
+              </TouchableOpacity>
+            )}
+          </View>
 
           {/* ── Ways to Earn ── */}
           <Text style={styles.sectionTitle}>Recent activity</Text>
@@ -733,6 +841,109 @@ export default function RewardsScreen() {
                 onPress={() => setShowSuccess(false)}
               >
                 <Text style={modalStyles.successBtnText}>Great!</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        {/* ── Subscription Purchase Modal ── */}
+        <Modal
+          visible={showSubModal}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowSubModal(false)}
+        >
+          <View style={modalStyles.overlay}>
+            <TouchableOpacity style={modalStyles.overlayClose} activeOpacity={1} onPress={() => setShowSubModal(false)} />
+            <View style={modalStyles.sheet}>
+              <View style={modalStyles.header}>
+                <Text style={modalStyles.headerTitle}>Subscribe to SeatSip</Text>
+                <TouchableOpacity onPress={() => setShowSubModal(false)} style={modalStyles.closeBtn}>
+                  <AppIcon name="close" size={16} color="#6D3914" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ marginBottom: 20 }}>
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: 16,
+                    borderRadius: 12,
+                    borderWidth: 1.5,
+                    borderColor: subPlanType === 'MONTHLY' ? '#6D3914' : '#E4CDB0',
+                    backgroundColor: subPlanType === 'MONTHLY' ? 'rgba(109,57,20,0.08)' : '#FFF',
+                    marginBottom: 10,
+                  }}
+                  onPress={() => setSubPlanType('MONTHLY')}
+                  activeOpacity={0.7}
+                >
+                  <View>
+                    <Text style={{ fontSize: 16, fontWeight: '800', color: '#3F1D0E' }}>Monthly</Text>
+                    <Text style={{ fontSize: 12, color: '#666', marginTop: 2 }}>₹199/month — Cancel anytime</Text>
+                  </View>
+                  <Text style={{ fontSize: 20, fontWeight: '900', color: '#6D3914' }}>₹199</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: 16,
+                    borderRadius: 12,
+                    borderWidth: 1.5,
+                    borderColor: subPlanType === 'YEARLY' ? '#6D3914' : '#E4CDB0',
+                    backgroundColor: subPlanType === 'YEARLY' ? 'rgba(109,57,20,0.08)' : '#FFF',
+                  }}
+                  onPress={() => setSubPlanType('YEARLY')}
+                  activeOpacity={0.7}
+                >
+                  <View>
+                    <Text style={{ fontSize: 16, fontWeight: '800', color: '#3F1D0E' }}>Yearly</Text>
+                    <Text style={{ fontSize: 12, color: '#666', marginTop: 2 }}>₹2,029/year — Save 15%</Text>
+                  </View>
+                  <Text style={{ fontSize: 20, fontWeight: '900', color: '#6D3914' }}>₹2,029</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ backgroundColor: '#E4CDB0', borderRadius: 12, padding: 14, marginBottom: 20 }}>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#3F1D0E', marginBottom: 8 }}>Benefits</Text>
+                {[
+                  '1.5x points multiplier on all earnings',
+                  'Points never expire while subscribed',
+                  'Priority redemption — 10% fewer points needed',
+                  '2x points on birthday month',
+                  'Subscriber-only promotional codes',
+                ].map((benefit, i) => (
+                  <View key={i} style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 }}>
+                    <Text style={{ color: '#4CAF50', marginRight: 6, fontSize: 13 }}>✓</Text>
+                    <Text style={{ fontSize: 12, color: '#3F1D0E', flex: 1 }}>{benefit}</Text>
+                  </View>
+                ))}
+              </View>
+
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16, paddingHorizontal: 4 }}>
+                <Text style={{ fontSize: 14, color: '#666' }}>Wallet Balance</Text>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: '#3F1D0E' }}>₹{Math.floor(subStatus?.walletBalance ?? 0)}</Text>
+              </View>
+
+              {subError ? <Text style={modalStyles.errorText}>{subError}</Text> : null}
+
+              <TouchableOpacity
+                style={modalStyles.payBtn}
+                activeOpacity={0.9}
+                onPress={handleSubscribe}
+                disabled={subPaying}
+              >
+                {subPaying ? (
+                  <ActivityIndicator color="#FFF" size="small" />
+                ) : (
+                  <Text style={modalStyles.payBtnText}>
+                    Pay ₹{subPlanType === 'YEARLY' ? Math.round(199 * 12 * 0.85) : 199} from Wallet
+                  </Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>

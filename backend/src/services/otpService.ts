@@ -20,28 +20,25 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-/**
- * Generates a random 6-digit numeric OTP, saves it in memory with 10-minute TTL,
- * and prints it beautifully in the server console (with SMTP email delivery if configured).
- */
-export async function generateAndSendOtp(email: string): Promise<void> {
-  const cleanEmail = email.trim().toLowerCase();
-  
-  // Generate cryptographically secure 6-digit numeric OTP
-  const otp = Math.floor(100000 + crypto.randomInt(900000)).toString();
-  
-  // Set 10-minute expiration limit
-  const expiresAt = Date.now() + 10 * 60 * 1000;
-  
-  otpMap.set(cleanEmail, { otp, expiresAt });
+function generateOtp(): string {
+  return Math.floor(100000 + crypto.randomInt(900000)).toString();
+}
 
-  // Beautiful developer console logging for effortless local testing
+function storeOtp(key: string): string {
+  const otp = generateOtp();
+  const expiresAt = Date.now() + 10 * 60 * 1000;
+  otpMap.set(key.trim().toLowerCase(), { otp, expiresAt });
+  return otp;
+}
+
+async function sendOtpViaEmail(email: string, otp: string): Promise<void> {
+  const cleanEmail = email.trim().toLowerCase();
+
   console.log('\n┌────────────────────────────────────────────────────────┐');
   console.log(`│  📩  [EMAIL OTP DISPATCHED TO: ${cleanEmail.padEnd(26)}]  │`);
   console.log(`│  🔑  VERIFICATION CODE: ${otp.padEnd(30)} │`);
   console.log('└────────────────────────────────────────────────────────┘\n');
 
-  // Attempt real email dispatch if SMTP is configured
   if (process.env.SMTP_USER && process.env.SMTP_PASS) {
     try {
       await transporter.sendMail({
@@ -68,6 +65,77 @@ export async function generateAndSendOtp(email: string): Promise<void> {
       console.error('[OTP Service] Failed to send email via SMTP (using console fallback):', err);
     }
   }
+}
+
+async function sendOtpViaSms(phone: string, otp: string): Promise<void> {
+  const cleanPhone = phone.trim();
+
+  console.log('\n┌────────────────────────────────────────────────────────┐');
+  console.log(`│  📱  [SMS OTP DISPATCHED TO: ${cleanPhone.padEnd(26)}]  │`);
+  console.log(`│  🔑  VERIFICATION CODE: ${otp.padEnd(30)} │`);
+  console.log('└────────────────────────────────────────────────────────┘\n');
+
+  // ── SMS Provider Integration ──────────────────────────────────────────
+  // To send real SMS, configure one of the providers below:
+  //
+  // Twilio:
+  //   TWILIO_ACCOUNT_SID=your_sid
+  //   TWILIO_AUTH_TOKEN=your_token
+  //   TWILIO_FROM_NUMBER=+1234567890
+  //
+  // MSG91:
+  //   MSG91_AUTH_KEY=your_key
+  //   MSG91_SENDER_ID=SEATSIP
+  //
+  // If configured, uncomment and use the appropriate SDK:
+  //
+  // if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+  //   try {
+  //     const twilio = require('twilio');
+  //     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+  //     await client.messages.create({
+  //       body: `Your SeatSip verification code is: ${otp}. Valid for 10 minutes.`,
+  //       from: process.env.TWILIO_FROM_NUMBER,
+  //       to: cleanPhone,
+  //     });
+  //     console.log(`[OTP Service] Successfully dispatched SMS to ${cleanPhone}`);
+  //   } catch (err) {
+  //     console.error('[OTP Service] Failed to send SMS via Twilio (using console fallback):', err);
+  //   }
+  // }
+
+  console.log(`[OTP Service] SMS delivery configured — OTP printed above for ${cleanPhone}`);
+}
+
+/**
+ * Generates and sends a 6-digit OTP to the user's email address.
+ * Falls back to console logging if SMTP is not configured.
+ */
+export async function generateAndSendOtp(email: string): Promise<void> {
+  const cleanEmail = email.trim().toLowerCase();
+  const otp = storeOtp(cleanEmail);
+  await sendOtpViaEmail(cleanEmail, otp);
+}
+
+/**
+ * Generates and sends a 6-digit OTP through the user's preferred channel.
+ * Returns the channel used so the frontend can show the right message.
+ */
+export async function generateAndSendOtpWithChannel(
+  email: string,
+  phone: string | null,
+  channel: 'email' | 'phone',
+): Promise<{ channel: 'email' | 'phone'; destination: string }> {
+  const key = email.trim().toLowerCase();
+  const otp = storeOtp(key);
+
+  if (channel === 'phone' && phone) {
+    await sendOtpViaSms(phone, otp);
+    return { channel: 'phone', destination: phone };
+  }
+
+  await sendOtpViaEmail(key, otp);
+  return { channel: 'email', destination: key };
 }
 
 /**

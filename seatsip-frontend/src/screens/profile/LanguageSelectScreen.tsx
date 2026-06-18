@@ -10,7 +10,9 @@ import {
   ImageBackground,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { changeLanguage } from '../../i18n';
 import AppIcon from '../../components/ui/AppIcon';
 import { safeLog } from '../../security/safeLog';
 
@@ -27,14 +29,13 @@ const LANGUAGES = [
   { code: 'ko', label: 'Korean', native: '한국어', flag: '🇰🇷' },
 ];
 
-const LANG_STORAGE_KEY = 'seatsip.language';
-
 export default function LanguageSelectScreen() {
   const navigation = useNavigation<any>();
+  const { t } = useTranslation();
   const [selectedCode, setSelectedCode] = useState('en');
 
   useEffect(() => {
-    AsyncStorage.getItem(LANG_STORAGE_KEY)
+    AsyncStorage.getItem('seatsip.language')
       .then((code) => { if (code) setSelectedCode(code); })
       .catch(() => {});
   }, []);
@@ -42,11 +43,10 @@ export default function LanguageSelectScreen() {
   const handleSelect = async (code: string) => {
     setSelectedCode(code);
     try {
-      await AsyncStorage.setItem(LANG_STORAGE_KEY, code);
+      await changeLanguage(code);
     } catch (e) {
       safeLog.error('Error saving language', e);
     }
-    // Small delay so the check animation is visible before going back
     setTimeout(() => navigation.goBack(), 220);
   };
 
@@ -65,8 +65,8 @@ export default function LanguageSelectScreen() {
             <AppIcon name="back" size={18} color="#333" />
           </TouchableOpacity>
           <View style={styles.headerText}>
-            <Text style={styles.headerTitle}>Language</Text>
-            <Text style={styles.headerSubtitle}>Choose your preferred language</Text>
+            <Text style={styles.headerTitle}>{t('profile.language')}</Text>
+            <Text style={styles.headerSubtitle}>{t('profile.language')}</Text>
           </View>
         </View>
 

@@ -165,6 +165,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <SidebarItem icon={BarChart3} label="Analytics" href="/analytics" active={pathname === '/analytics'} collapsed={sidebarCollapsed} />
               <SidebarItem icon={Shield} label="Permissions" href="/permissions" active={pathname === '/permissions'} collapsed={sidebarCollapsed} />
               <SidebarItem icon={CalendarCheck} label="Audit Logs" href="/audit-logs" active={pathname === '/audit-logs'} collapsed={sidebarCollapsed} />
+              {isAdmin && <SidebarItem icon={Bell} label="Notifications" href="/admin/notifications" active={pathname === '/admin/notifications'} collapsed={sidebarCollapsed} />}
             </>
           )}
         </nav>

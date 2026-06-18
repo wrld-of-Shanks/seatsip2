@@ -36,9 +36,9 @@ router.get('/items', async (req: Request, res: Response, next: NextFunction) => 
       ...item,
       category: item.category?.name || 'Bespoke',
       imageUrl: item.image_url,
-      isAvailable: item.is_available === 1,
-      isVeg: item.is_veg === 1,
-      isPopular: item.is_popular === 1,
+      isAvailable: item.is_available,
+      isVeg: item.is_veg,
+      isPopular: item.is_popular,
       price: item.price * 100, // Convert to subunits (cents) for the Next.js web admin
       caffeine: item.caffeine,
       tags: item.tags ? (typeof item.tags === 'string' ? JSON.parse(item.tags) : item.tags) : [],

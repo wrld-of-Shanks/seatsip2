@@ -197,6 +197,14 @@ export const api = {
       return fetchApi(`/admin/rewards/redemptions?${query}`);
     },
   },
+  notifications: {
+    send: (data: { title: string; body: string; targetAudience: 'all' | 'city' | 'subscribers'; city?: string; type?: string }) =>
+      fetchApi('/admin/notifications/send', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    history: () => fetchApi('/admin/notifications/history'),
+  },
   exploreCategories: {
     listPublic: () => fetchApi('/explore-categories'),
     list: () => fetchApi('/admin/explore-categories'),

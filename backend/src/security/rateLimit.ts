@@ -4,7 +4,7 @@ import { createClient } from 'redis';
 
 const redisUrl = process.env.REDIS_URL;
 
-const redisClient = redisUrl ? createClient({ url: redisUrl }) : null;
+export const redisClient = redisUrl ? createClient({ url: redisUrl }) : null;
 if (redisClient) {
   redisClient.on('error', (error) => console.error('redis rate-limit error', error));
   void redisClient.connect();
@@ -46,5 +46,23 @@ export const authRefreshLimiter = rateLimit({
   legacyHeaders: false,
   store: store('rl:auth:refresh:'),
   message: { success: false, message: 'Too many refresh attempts. Try again later.' },
+});
+
+export const apiGeneralLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  store: store('rl:api:general:'),
+  message: { success: false, message: 'Too many requests. Please slow down.' },
+});
+
+export const apiStrictLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  store: store('rl:api:strict:'),
+  message: { success: false, message: 'Too many requests. Please slow down.' },
 });
 

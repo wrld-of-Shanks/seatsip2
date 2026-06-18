@@ -1,4 +1,15 @@
 import 'express-async-errors';
+import * as Sentry from '@sentry/node';
+import { expressErrorHandler } from '@sentry/node';
+
+const SENTRY_DSN = process.env.SENTRY_DSN || '';
+if (SENTRY_DSN) {
+  Sentry.init({
+    dsn: SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+  });
+}
+
 import express from 'express';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
@@ -15,9 +26,16 @@ import rewardsRouter from './api/rewards';
 import menuRouter from './api/menu';
 import bannersRouter from './api/banners';
 import exploreCategoriesRouter from './api/exploreCategories';
-import { corsMiddleware, helmetMiddleware, requestId, safeMorgan, sanitizeInput } from './security/http';
-import { secureLogger } from './security/logger';
+import pointsRouter from './api/points';
+import subscriptionsRouter from './api/subscriptions';
+import offersRouter from './api/offers';
+import { corsMiddleware, helmetMiddleware, requestId, sanitizeInput } from './security/http';
+import { secureLogger, pinoLogger } from './security/logger';
 import { redactObjectForLog } from './security/redaction';
+import { apiGeneralLimiter, apiStrictLimiter } from './security/rateLimit';
+import pinoHttp from 'pino-http';
+import swaggerUi from 'swagger-ui-express';
+import swaggerSpec from './api/swagger';
 
 export function createApp(): express.Application {
   const app = express();
@@ -28,21 +46,28 @@ export function createApp(): express.Application {
   app.use(helmetMiddleware);
   app.use(corsMiddleware);
   app.use(compression());
-  app.use(safeMorgan);
+  app.use(pinoHttp({
+    logger: pinoLogger,
+    genReqId: (req) => (req as any).requestId || crypto.randomUUID(),
+  }));
   app.use('/api/v1/payments', paymentsRouter);
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
   app.use(sanitizeInput);
+  app.use('/api/v1', apiGeneralLimiter);
 
   app.get('/health', (_, res) =>
     res.json({ status: 'ok', timestamp: new Date().toISOString(), service: 'SeatSip API v1' })
   );
 
+  app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  app.get('/api/docs.json', (_, res) => res.json(swaggerSpec));
+
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/admin', adminRouter);
-  app.use('/api/v1/cafes', cafesRouter);
-  app.use('/api/v1/menu', menuRouter);
-  app.use('/api/v1/orders', ordersRouter);
+  app.use('/api/v1/cafes', apiStrictLimiter, cafesRouter);
+  app.use('/api/v1/menu', apiStrictLimiter, menuRouter);
+  app.use('/api/v1/orders', apiStrictLimiter, ordersRouter);
   app.use('/api/v1/reservations', reservationsRouter);
   app.use('/api/v1/cart', cartRouter);
   app.use('/api/v1/users', usersRouter);
@@ -50,8 +75,15 @@ export function createApp(): express.Application {
   app.use('/api/v1/rewards', rewardsRouter);
   app.use('/api/v1/banners', bannersRouter);
   app.use('/api/v1/explore-categories', exploreCategoriesRouter);
+  app.use('/api/v1/points', pointsRouter);
+  app.use('/api/v1/subscriptions', subscriptionsRouter);
+  app.use('/api/v1/offers', offersRouter);
 
   app.use('*', (_, res) => res.status(404).json({ success: false, message: 'Endpoint not found' }));
+
+  if (SENTRY_DSN) {
+    app.use(expressErrorHandler() as any);
+  }
 
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const requestId = (req as Request & { requestId?: string }).requestId || crypto.randomUUID();

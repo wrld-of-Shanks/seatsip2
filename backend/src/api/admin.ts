@@ -1,10 +1,13 @@
 import { Router, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
+import { z } from 'zod';
 import { prisma } from '../db';
 import { authenticate, requireRole } from '../common/auth';
 import { AuthenticatedRequest } from '../types/authenticated-request';
-import { audit } from '../security/http';
+import { audit, validate } from '../security/http';
+import { secureLogger } from '../security/logger';
+import { sendBulkPushNotification } from '../services/pushNotifications';
 
 const router = Router();
 
@@ -28,8 +31,8 @@ const tryParse = <T>(value: string | null | undefined, fallback: T): T => {
 const mapCafe = (cafe: any) => ({
   ...cafe,
   imageUrl: cafe.image_url,
-  isActive: cafe.is_active === 1,
-  isOpen: cafe.is_open === 1,
+  isActive: cafe.is_active,
+  isOpen: cafe.is_open,
   reviewCount: cafe.review_count,
   coverColor: cafe.cover_color,
   tags: tryParse(cafe.tags, []),
@@ -58,7 +61,7 @@ router.get('/stats', managerOnly, audit('ADMIN_STATS', 'admin'), async (req: Aut
     const cafeIds = (await prisma.cafe.findMany({ where, select: { id: true } })).map(c => c.id);
 
     const [totalCafes, totalOrders, todayRevenue, activeReservations, newUsers] = await Promise.all([
-      prisma.cafe.count({ where: { id: { in: cafeIds }, is_active: 1 } }),
+      prisma.cafe.count({ where: { id: { in: cafeIds }, is_active: true } }),
       prisma.order.count({ where: { cafe_id: { in: cafeIds } } }),
       prisma.order.aggregate({
         where: {
@@ -82,6 +85,7 @@ router.get('/stats', managerOnly, audit('ADMIN_STATS', 'admin'), async (req: Aut
       }),
     ]);
 
+    secureLogger.info(`[Admin] Stats fetched for user ${req.user.userId} (${req.user.role})`);
     return res.status(200).json({
       success: true,
       data: {
@@ -158,6 +162,7 @@ router.get('/revenue', managerOnly, async (req: AuthenticatedRequest, res: Respo
       amount,
     }));
 
+    secureLogger.info(`[Admin] Revenue data fetched for user ${req.user.userId}: ${data.length} days`);
     return res.status(200).json({
       success: true,
       data,
@@ -212,8 +217,8 @@ router.get('/cafes', managerOnly, async (req: AuthenticatedRequest, res: Respons
     const mappedCafes = cafes.map((cafe) => ({
       ...cafe,
       imageUrl: cafe.image_url,
-      isActive: cafe.is_active === 1,
-      isOpen: cafe.is_open === 1,
+      isActive: cafe.is_active,
+      isOpen: cafe.is_open,
       reviewCount: cafe.review_count,
       coverColor: cafe.cover_color,
       tags: cafe.tags ? (typeof cafe.tags === 'string' ? JSON.parse(cafe.tags) : cafe.tags) : [],
@@ -221,6 +226,7 @@ router.get('/cafes', managerOnly, async (req: AuthenticatedRequest, res: Respons
       images: cafe.images ? (typeof cafe.images === 'string' ? JSON.parse(cafe.images) : cafe.images) : [],
     }));
 
+    secureLogger.info(`[Admin] Cafes listed: ${mappedCafes.length} by user ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: mappedCafes,
@@ -308,7 +314,7 @@ router.post('/cafes', managerOnly, audit('CREATE_CAFE', 'cafe'), async (req: Aut
       return '[]';
     };
 
-    const finalIsOpen = isOpen !== undefined ? (isOpen ? 1 : 0) : (is_open !== undefined ? (is_open ? 1 : 0) : 1);
+    const finalIsOpen = isOpen !== undefined ? isOpen : (is_open !== undefined ? is_open : true);
     const finalTags = parseStringList(tags);
     const finalMoods = parseStringList(moods);
     const finalImages = parseStringList(images || galleryImages);
@@ -330,10 +336,10 @@ router.post('/cafes', managerOnly, audit('CREATE_CAFE', 'cafe'), async (req: Aut
         image_url: finalImageUrl,
         open_time: openTime,
         close_time: closeTime,
-        is_active: 1,
-        wifi: wifi !== undefined ? (wifi ? 1 : 0) : 1,
-        parking: parking !== undefined ? (parking ? 1 : 0) : 0,
-        pet_friendly: pet_friendly !== undefined ? (pet_friendly ? 1 : 0) : 0,
+        is_active: true,
+        wifi: wifi !== undefined ? wifi : true,
+        parking: parking !== undefined ? parking : false,
+        pet_friendly: pet_friendly !== undefined ? pet_friendly : false,
         price_level: price_level !== undefined ? parseInt(price_level as string) : 2,
         prep_time_minutes: prep_time_minutes !== undefined ? parseInt(prep_time_minutes as string) : 15,
         delivery_fee: delivery_fee !== undefined ? parseFloat(delivery_fee as string) : 0,
@@ -354,8 +360,8 @@ router.post('/cafes', managerOnly, audit('CREATE_CAFE', 'cafe'), async (req: Aut
     const mappedCafe = {
       ...cafe,
       imageUrl: cafe.image_url,
-      isActive: cafe.is_active === 1,
-      isOpen: cafe.is_open === 1,
+      isActive: cafe.is_active,
+      isOpen: cafe.is_open,
       reviewCount: cafe.review_count,
       coverColor: cafe.cover_color,
       tags: cafe.tags ? (typeof cafe.tags === 'string' ? JSON.parse(cafe.tags) : cafe.tags) : [],
@@ -364,6 +370,7 @@ router.post('/cafes', managerOnly, audit('CREATE_CAFE', 'cafe'), async (req: Aut
       reservation_slots: cafe.reservation_slots ? (typeof cafe.reservation_slots === 'string' ? JSON.parse(cafe.reservation_slots) : cafe.reservation_slots) : [],
     };
 
+    secureLogger.info(`[Admin] Cafe created: ${cafe.id} by user ${req.user.userId}`);
     return res.status(201).json({
       success: true,
       data: mappedCafe,
@@ -387,7 +394,10 @@ router.patch('/cafes/:id', managerOnly, audit('UPDATE_CAFE', 'cafe'), async (req
       const cafe = await prisma.cafe.findFirst({
         where: { id, owner_id: req.user.userId }
       });
-      if (!cafe) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!cafe) {
+        secureLogger.warn(`[Admin] Access denied: cafe ownership check`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
     }
 
     const {
@@ -441,13 +451,13 @@ router.patch('/cafes/:id', managerOnly, audit('UPDATE_CAFE', 'cafe'), async (req
     
     // Map fields and handle conversions
     const updateData: any = { ...rest };
-    if (is_active !== undefined) updateData.is_active = is_active ? 1 : 0;
-    if (isActive !== undefined) updateData.is_active = isActive ? 1 : 0;
-    if (wifi !== undefined) updateData.wifi = wifi ? 1 : 0;
-    if (parking !== undefined) updateData.parking = parking ? 1 : 0;
+    if (is_active !== undefined) updateData.is_active = is_active;
+    if (isActive !== undefined) updateData.is_active = isActive;
+    if (wifi !== undefined) updateData.wifi = wifi;
+    if (parking !== undefined) updateData.parking = parking;
     
-    if (pet_friendly !== undefined) updateData.pet_friendly = pet_friendly ? 1 : 0;
-    else if (petFriendly !== undefined) updateData.pet_friendly = petFriendly ? 1 : 0;
+    if (pet_friendly !== undefined) updateData.pet_friendly = pet_friendly;
+    else if (petFriendly !== undefined) updateData.pet_friendly = petFriendly;
 
     if (price_level !== undefined) updateData.price_level = parseInt(price_level as string);
     else if (priceLevel !== undefined) updateData.price_level = parseInt(priceLevel as string);
@@ -502,8 +512,8 @@ router.patch('/cafes/:id', managerOnly, audit('UPDATE_CAFE', 'cafe'), async (req
       return '[]';
     };
 
-    if (is_open !== undefined) updateData.is_open = is_open ? 1 : 0;
-    if (isOpen !== undefined) updateData.is_open = isOpen ? 1 : 0;
+    if (is_open !== undefined) updateData.is_open = is_open;
+    if (isOpen !== undefined) updateData.is_open = isOpen;
     if (tags !== undefined) updateData.tags = parseStringList(tags);
     if (moods !== undefined) updateData.moods = parseStringList(moods);
     if (images !== undefined) updateData.images = parseStringList(images);
@@ -523,8 +533,8 @@ router.patch('/cafes/:id', managerOnly, audit('UPDATE_CAFE', 'cafe'), async (req
     const mappedCafe = {
       ...cafe,
       imageUrl: cafe.image_url,
-      isActive: cafe.is_active === 1,
-      isOpen: cafe.is_open === 1,
+      isActive: cafe.is_active,
+      isOpen: cafe.is_open,
       reviewCount: cafe.review_count,
       coverColor: cafe.cover_color,
       tags: cafe.tags ? (typeof cafe.tags === 'string' ? JSON.parse(cafe.tags) : cafe.tags) : [],
@@ -533,6 +543,7 @@ router.patch('/cafes/:id', managerOnly, audit('UPDATE_CAFE', 'cafe'), async (req
       reservation_slots: cafe.reservation_slots ? (typeof cafe.reservation_slots === 'string' ? JSON.parse(cafe.reservation_slots) : cafe.reservation_slots) : [],
     };
 
+    secureLogger.info(`[Admin] Cafe updated: ${id} by user ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: mappedCafe,
@@ -556,7 +567,10 @@ router.delete('/cafes/:id', managerOnly, audit('DELETE_CAFE', 'cafe'), async (re
       const cafe = await prisma.cafe.findFirst({
         where: { id, owner_id: req.user.userId }
       });
-      if (!cafe) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!cafe) {
+        secureLogger.warn(`[Admin] Access denied: cafe ownership check`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
     }
 
     // Delete all dependent relations first to avoid foreign key constraint violations
@@ -568,6 +582,7 @@ router.delete('/cafes/:id', managerOnly, audit('DELETE_CAFE', 'cafe'), async (re
       await tx.cafe.delete({ where: { id } });
     });
 
+    secureLogger.info(`[Admin] Cafe deleted: ${id} by user ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       message: 'Cafe deleted successfully',
@@ -614,8 +629,8 @@ async function enrichTablesWithStatus(tables: any[], dateParam?: string) {
   }
 
   return tables.map((t) => {
-    let status = t.is_available === 1 ? 'AVAILABLE' : 'OCCUPIED';
-    if (t.is_available === 1) {
+    let status = t.is_available ? 'AVAILABLE' : 'OCCUPIED';
+    if (t.is_available) {
       const resStatus = reservationMap.get(t.id);
       if (resStatus === 'SEATED') {
         status = 'OCCUPIED';
@@ -674,6 +689,7 @@ router.get('/tables', managerOnly, async (req: AuthenticatedRequest, res: Respon
 
     const mappedTables = await enrichTablesWithStatus(tables, date as string | undefined);
 
+    secureLogger.info(`[Admin] Tables listed: ${mappedTables.length} for user ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: mappedTables,
@@ -704,7 +720,10 @@ router.get('/cafes/:cafeId/tables', managerOnly, async (req: AuthenticatedReques
       const cafe = await prisma.cafe.findFirst({
         where: { id: cafeId, owner_id: req.user.userId }
       });
-      if (!cafe) return res.status(403).json({ success: false, message: 'You do not own this cafe' });
+      if (!cafe) {
+        secureLogger.warn(`[Admin] Access denied: you do not own this cafe`);
+        return res.status(403).json({ success: false, message: 'You do not own this cafe' });
+      }
     }
 
     const tables = await prisma.table.findMany({
@@ -714,6 +733,7 @@ router.get('/cafes/:cafeId/tables', managerOnly, async (req: AuthenticatedReques
 
     const mappedTables = await enrichTablesWithStatus(tables, date as string | undefined);
 
+    secureLogger.info(`[Admin] Cafe tables listed: ${mappedTables.length} for cafe ${cafeId}`);
     return res.status(200).json({ success: true, data: mappedTables });
   } catch (error) {
     next(error);
@@ -734,12 +754,15 @@ router.post('/cafes/:cafeId/tables', managerOnly, audit('CREATE_TABLE', 'table')
       const cafe = await prisma.cafe.findFirst({
         where: { id: cafeId, owner_id: req.user.userId }
       });
-      if (!cafe) return res.status(403).json({ success: false, message: 'You do not own this cafe' });
+      if (!cafe) {
+        secureLogger.warn(`[Admin] Access denied: you do not own this cafe`);
+        return res.status(403).json({ success: false, message: 'You do not own this cafe' });
+      }
     }
 
     const finalTableNumber = tableNumber || table_number;
     const finalFloor = section || floor || 'Ground';
-    const finalIsAvailable = status !== undefined ? (status === 'AVAILABLE' ? 1 : 0) : 1;
+    const finalIsAvailable = status !== undefined ? (status === 'AVAILABLE') : true;
 
     const table = await prisma.table.create({
       data: {
@@ -758,9 +781,10 @@ router.post('/cafes/:cafeId/tables', managerOnly, audit('CREATE_TABLE', 'table')
       ...table,
       tableNumber: table.table_number,
       section: table.floor,
-      status: table.is_available === 1 ? 'AVAILABLE' : 'OCCUPIED',
+      status: table.is_available ? 'AVAILABLE' : 'OCCUPIED',
     };
 
+    secureLogger.info(`[Admin] Table created: ${table.id} in cafe ${cafeId} by user ${req.user.userId}`);
     return res.status(201).json({ success: true, data: mappedTable });
   } catch (error) {
     next(error);
@@ -781,12 +805,15 @@ router.post('/tables', managerOnly, audit('CREATE_TABLE', 'table'), async (req: 
       const cafe = await prisma.cafe.findFirst({
         where: { id: cafeId, owner_id: req.user.userId }
       });
-      if (!cafe) return res.status(403).json({ success: false, message: 'You do not own this cafe' });
+      if (!cafe) {
+        secureLogger.warn(`[Admin] Access denied: you do not own this cafe`);
+        return res.status(403).json({ success: false, message: 'You do not own this cafe' });
+      }
     }
 
     const finalTableNumber = tableNumber || table_number;
     const finalFloor = section || floor || 'Ground';
-    const finalIsAvailable = status !== undefined ? (status === 'AVAILABLE' ? 1 : 0) : 1;
+    const finalIsAvailable = status !== undefined ? (status === 'AVAILABLE') : true;
 
     const table = await prisma.table.create({
       data: {
@@ -805,9 +832,10 @@ router.post('/tables', managerOnly, audit('CREATE_TABLE', 'table'), async (req: 
       ...table,
       tableNumber: table.table_number,
       section: table.floor,
-      status: table.is_available === 1 ? 'AVAILABLE' : 'OCCUPIED',
+      status: table.is_available ? 'AVAILABLE' : 'OCCUPIED',
     };
 
+    secureLogger.info(`[Admin] Table created in cafe ${cafeId} by user ${req.user.userId}`);
     return res.status(201).json({
       success: true,
       data: mappedTable,
@@ -831,14 +859,17 @@ router.patch('/tables/:id', managerOnly, audit('UPDATE_TABLE', 'table'), async (
       const table = await prisma.table.findFirst({
         where: { id, cafe: { owner_id: req.user.userId } }
       });
-      if (!table) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!table) {
+        secureLogger.warn(`[Admin] Access denied: table ownership check`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
     }
 
     const { is_available, status, capacity, posX, posY, tableNumber, table_number, floor, section, ...rest } = req.body;
 
     const updateData: any = { ...rest };
-    if (is_available !== undefined) updateData.is_available = is_available ? 1 : 0;
-    if (status !== undefined) updateData.is_available = status === 'AVAILABLE' ? 1 : 0;
+    if (is_available !== undefined) updateData.is_available = is_available;
+    if (status !== undefined) updateData.is_available = status === 'AVAILABLE';
     if (capacity !== undefined) updateData.capacity = parseInt(capacity as string);
     if (posX !== undefined) updateData.position_x = parseFloat(posX as string);
     if (posY !== undefined) updateData.position_y = parseFloat(posY as string);
@@ -858,9 +889,10 @@ router.patch('/tables/:id', managerOnly, audit('UPDATE_TABLE', 'table'), async (
       ...table,
       tableNumber: table.table_number,
       section: table.floor,
-      status: table.is_available === 1 ? 'AVAILABLE' : 'OCCUPIED',
+      status: table.is_available ? 'AVAILABLE' : 'OCCUPIED',
     };
 
+    secureLogger.info(`[Admin] Table updated: ${id} by user ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: mappedTable,
@@ -884,11 +916,15 @@ router.delete('/tables/:id', managerOnly, audit('DELETE_TABLE', 'table'), async 
       const table = await prisma.table.findFirst({
         where: { id, cafe: { owner_id: req.user.userId } }
       });
-      if (!table) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!table) {
+        secureLogger.warn(`[Admin] Access denied: table ownership check`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
     }
 
     await prisma.table.delete({ where: { id } });
 
+    secureLogger.info(`[Admin] Table deleted: ${id} by user ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       message: 'Table deleted successfully',
@@ -952,13 +988,14 @@ router.get('/users', adminOnly, async (req: AuthenticatedRequest, res: Response,
     ]);
     const mappedUsers = users.map((u) => ({
       ...u,
-      isActive: u.is_active === 1,
+      isActive: u.is_active,
       walletBalance: u.wallet_balance,
       loyaltyPoints: u.loyalty_points,
       loyaltyTier: u.loyalty_tier,
       termsAcceptedAt: u.terms_accepted_at,
     }));
 
+    secureLogger.info(`[Admin] Users listed: ${mappedUsers.length} by user ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: mappedUsers,
@@ -985,6 +1022,7 @@ router.patch('/users/:id/role', adminOnly, audit('CHANGE_ROLE', 'user'), async (
     const { role } = req.body;
 
     if (!['USER', 'ADMIN', 'CAFE_OWNER'].includes(role)) {
+      secureLogger.warn(`[Admin] Invalid role change attempt: ${role} by user ${req.user.userId}`);
       return res.status(400).json({ success: false, message: 'Invalid role' });
     }
 
@@ -993,6 +1031,7 @@ router.patch('/users/:id/role', adminOnly, audit('CHANGE_ROLE', 'user'), async (
       data: { role },
     });
 
+    secureLogger.info(`[Admin] User role changed: ${id} -> ${role} by admin ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: user,
@@ -1014,9 +1053,10 @@ router.patch('/users/:id/status', adminOnly, audit('CHANGE_STATUS', 'user'), asy
 
     const user = await prisma.user.update({
       where: { id },
-      data: { is_active: isActive ? 1 : 0 },
+      data: { is_active: isActive },
     });
 
+    secureLogger.info(`[Admin] User ${id} status -> ${isActive} by admin ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: user,
@@ -1036,7 +1076,7 @@ router.get('/cafe-owners/pending', adminOnly, async (req: AuthenticatedRequest, 
     const owners = await prisma.user.findMany({
       where: {
         role: 'CAFE_OWNER',
-        is_active: 0,
+        is_active: false,
         auth_provider: 'owner_pending',
         verification_status: { in: ['PENDING', 'PENDING_APPROVAL'] },
       },
@@ -1083,7 +1123,7 @@ router.get('/cafe-owners/pending', adminOnly, async (req: AuthenticatedRequest, 
       name: o.name,
       email: o.email,
       phone: o.phone,
-      isActive: o.is_active === 1,
+      isActive: o.is_active,
       governmentId: o.government_id,
       businessLicense: o.business_license,
       experienceYears: o.experience_years,
@@ -1102,7 +1142,7 @@ router.get('/cafe-owners/pending', adminOnly, async (req: AuthenticatedRequest, 
             images: tryParse(o.owned_cafes[0].images, []),
             openingHours: `${o.owned_cafes[0].open_time} - ${o.owned_cafes[0].close_time}`,
             tags: tryParse(o.owned_cafes[0].tags, []),
-            isActive: o.owned_cafes[0].is_active === 1,
+            isActive: o.owned_cafes[0].is_active,
             createdAt: o.owned_cafes[0].created_at,
           }
         : null,
@@ -1111,6 +1151,7 @@ router.get('/cafe-owners/pending', adminOnly, async (req: AuthenticatedRequest, 
       }
     }));
 
+    secureLogger.info(`[Admin] Pending cafe owners listed: ${mapped.length} by admin ${req.user.userId}`);
     return res.status(200).json({ success: true, data: mapped });
   } catch (error) {
     next(error);
@@ -1127,7 +1168,10 @@ router.post('/cafe-owners', adminOnly, audit('CREATE_OWNER', 'user'), async (req
     const { name, email, password, phone, governmentId, businessLicense, experienceYears, verificationStatus, avatar } = req.body;
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) return res.status(400).json({ success: false, message: 'Email already exists' });
+    if (existingUser) {
+      secureLogger.warn(`[Admin] Cafe owner email already exists: ${email}`);
+      return res.status(400).json({ success: false, message: 'Email already exists' });
+    }
 
     const passwordHash = await bcrypt.hash(password, 10);
 
@@ -1144,10 +1188,11 @@ router.post('/cafe-owners', adminOnly, audit('CREATE_OWNER', 'user'), async (req
         experience_years: experienceYears !== undefined && experienceYears !== null && experienceYears !== '' ? parseInt(experienceYears as string) : null,
         verification_status: verificationStatus || 'PENDING',
         avatar: avatar || null,
-        is_active: 1
+        is_active: true
       }
     });
 
+    secureLogger.info(`[Admin] Cafe owner created: ${owner.id} by admin ${req.user.userId}`);
     return res.status(201).json({
       success: true,
       data: {
@@ -1180,7 +1225,7 @@ router.patch('/cafe-owners/:id', adminOnly, audit('UPDATE_OWNER', 'user'), async
     if (name !== undefined) updateData.name = name;
     if (email !== undefined) updateData.email = email;
     if (phone !== undefined) updateData.phone = phone || null;
-    if (isActive !== undefined) updateData.is_active = isActive ? 1 : 0;
+    if (isActive !== undefined) updateData.is_active = isActive;
     if (governmentId !== undefined) updateData.government_id = governmentId || null;
     if (businessLicense !== undefined) updateData.business_license = businessLicense || null;
     if (experienceYears !== undefined) updateData.experience_years = experienceYears !== null && experienceYears !== '' ? parseInt(experienceYears as string) : null;
@@ -1196,6 +1241,7 @@ router.patch('/cafe-owners/:id', adminOnly, audit('UPDATE_OWNER', 'user'), async
       data: updateData
     });
 
+    secureLogger.info(`[Admin] Cafe owner updated: ${id} by admin ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: {
@@ -1203,7 +1249,7 @@ router.patch('/cafe-owners/:id', adminOnly, audit('UPDATE_OWNER', 'user'), async
         name: owner.name,
         email: owner.email,
         phone: owner.phone,
-        isActive: owner.is_active === 1,
+        isActive: owner.is_active,
         governmentId: owner.government_id,
         businessLicense: owner.business_license,
         experienceYears: owner.experience_years,
@@ -1228,11 +1274,13 @@ router.delete('/cafe-owners/:id', adminOnly, audit('DELETE_OWNER', 'user'), asyn
     // Check if owner has cafes
     const cafes = await prisma.cafe.count({ where: { owner_id: id } });
     if (cafes > 0) {
+      secureLogger.warn(`[Admin] Cannot delete cafe owner ${id}: has ${cafes} active cafes`);
       return res.status(400).json({ success: false, message: 'Cannot delete owner who still has active cafes' });
     }
 
     await prisma.user.delete({ where: { id, role: 'CAFE_OWNER' } });
 
+    secureLogger.info(`[Admin] Cafe owner deleted: ${id} by admin ${req.user.userId}`);
     return res.status(200).json({ success: true, message: 'Owner deleted successfully' });
   } catch (error) {
     next(error);
@@ -1273,6 +1321,7 @@ router.get('/reservations', managerOnly, async (req: AuthenticatedRequest, res: 
       prisma.reservation.count({ where })
     ]);
 
+    secureLogger.info(`[Admin] Reservations listed: ${reservations.length} by user ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: reservations,
@@ -1303,6 +1352,7 @@ router.post('/reservations', managerOnly, audit('CREATE_RESERVATION', 'reservati
     }
 
     if (!finalDate || !finalTime) {
+      secureLogger.warn(`[Admin] Invalid date or time provided for reservation`);
       return res.status(400).json({ success: false, message: 'Invalid date or time provided' });
     }
 
@@ -1311,7 +1361,10 @@ router.post('/reservations', managerOnly, audit('CREATE_RESERVATION', 'reservati
       const cafe = await prisma.cafe.findFirst({
         where: { id: cafeId, owner_id: req.user.userId }
       });
-      if (!cafe) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!cafe) {
+        secureLogger.warn(`[Admin] Access denied: reservation cafe ownership check`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
     }
 
     let finalUserId = userId;
@@ -1339,7 +1392,7 @@ router.post('/reservations', managerOnly, audit('CREATE_RESERVATION', 'reservati
             phone: phone || null,
             password_hash: 'manual-reservation-placeholder',
             role: 'USER',
-            is_active: 1
+            is_active: true
           }
         });
         finalUserId = guestUser.id;
@@ -1347,6 +1400,7 @@ router.post('/reservations', managerOnly, audit('CREATE_RESERVATION', 'reservati
     }
 
     if (!finalUserId) {
+      secureLogger.warn(`[Admin] Reservation requires User ID or guest details`);
       return res.status(400).json({ success: false, message: 'User ID or guest details (name, email/phone) are required' });
     }
 
@@ -1365,6 +1419,7 @@ router.post('/reservations', managerOnly, audit('CREATE_RESERVATION', 'reservati
       }
     });
 
+    secureLogger.info(`[Admin] Reservation created: ${reservation.id} by user ${req.user.userId}`);
     return res.status(201).json({ success: true, data: reservation });
   } catch (error) {
     next(error);
@@ -1385,7 +1440,10 @@ router.patch('/reservations/:id', managerOnly, audit('UPDATE_RESERVATION', 'rese
       const resv = await prisma.reservation.findFirst({
         where: { id, cafe: { owner_id: req.user.userId } }
       });
-      if (!resv) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!resv) {
+        secureLogger.warn(`[Admin] Access denied: reservation ownership check`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
     }
 
     const reservation = await prisma.reservation.update({
@@ -1393,6 +1451,7 @@ router.patch('/reservations/:id', managerOnly, audit('UPDATE_RESERVATION', 'rese
       data: { status }
     });
 
+    secureLogger.info(`[Admin] Reservation ${id} status updated: ${status} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: reservation });
   } catch (error) {
     next(error);
@@ -1426,6 +1485,7 @@ router.get('/orders', managerOnly, async (req: AuthenticatedRequest, res: Respon
       take: limit
     });
 
+    secureLogger.info(`[Admin] Orders listed: ${orders.length} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: orders });
   } catch (error) {
     next(error);
@@ -1445,7 +1505,10 @@ router.patch('/orders/:id', managerOnly, audit('UPDATE_ORDER', 'order'), async (
       const order = await prisma.order.findFirst({
         where: { id, cafe: { owner_id: req.user.userId } }
       });
-      if (!order) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!order) {
+        secureLogger.warn(`[Admin] Access denied: order ownership check`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
     }
 
     const order = await prisma.order.update({
@@ -1453,6 +1516,7 @@ router.patch('/orders/:id', managerOnly, audit('UPDATE_ORDER', 'order'), async (
       data: { status }
     });
 
+    secureLogger.info(`[Admin] Order ${id} status updated: ${status} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: order });
   } catch (error) {
     next(error);
@@ -1490,6 +1554,7 @@ router.get('/analytics/orders', managerOnly, async (req: AuthenticatedRequest, r
       count: s._count.id,
     }));
 
+    secureLogger.info(`[Admin] Order analytics by user ${req.user.userId}: ${data.length} statuses`);
     return res.status(200).json({ success: true, data });
   } catch (error) {
     next(error);
@@ -1527,6 +1592,7 @@ router.get('/analytics/payments', managerOnly, async (req: AuthenticatedRequest,
       count: s._count.id,
     }));
 
+    secureLogger.info(`[Admin] Payment analytics by user ${req.user.userId}: ${data.length} statuses`);
     return res.status(200).json({ success: true, data });
   } catch (error) {
     next(error);
@@ -1563,6 +1629,7 @@ router.post('/menu/items', managerOnly, audit('CREATE_MENU_ITEM', 'menu'), async
 
     const finalExploreCategory = exploreCategory || explore_category;
     if (!finalExploreCategory) {
+      secureLogger.warn(`[Admin] Menu item creation missing explore category`);
       return res.status(400).json({ success: false, message: 'Explore category is compulsory' });
     }
 
@@ -1571,7 +1638,10 @@ router.post('/menu/items', managerOnly, audit('CREATE_MENU_ITEM', 'menu'), async
       const cafe = await prisma.cafe.findFirst({
         where: { id: cafeId, owner_id: req.user.userId }
       });
-      if (!cafe) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!cafe) {
+        secureLogger.warn(`[Admin] Access denied: menu item cafe ownership`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
     }
 
     // Resolve category name (string) to database category ID
@@ -1610,9 +1680,9 @@ router.post('/menu/items', managerOnly, audit('CREATE_MENU_ITEM', 'menu'), async
         description: description || null,
         price: basePrice,
         image_url: finalImageUrl,
-        is_veg: isVeg ? 1 : 0,
-        is_popular: isPopular ? 1 : 0,
-        is_available: 1,
+        is_veg: isVeg,
+        is_popular: isPopular,
+        is_available: true,
         prep_time_minutes: prepTimeMinutes !== undefined ? parseInt(prepTimeMinutes as string) : 10,
         calories: calories !== undefined && calories !== null && calories !== '' ? parseInt(calories as string) : null,
         caffeine: caffeine !== undefined && caffeine !== null && caffeine !== '' ? parseInt(caffeine as string) : null,
@@ -1628,15 +1698,16 @@ router.post('/menu/items', managerOnly, audit('CREATE_MENU_ITEM', 'menu'), async
       ...item,
       category: category || 'Bespoke',
       imageUrl: item.image_url,
-      isAvailable: item.is_available === 1,
-      isVeg: item.is_veg === 1,
-      isPopular: item.is_popular === 1,
+      isAvailable: item.is_available,
+      isVeg: item.is_veg,
+      isPopular: item.is_popular,
       caffeine: item.caffeine,
       tags: item.tags ? (typeof item.tags === 'string' ? JSON.parse(item.tags) : item.tags) : [],
       price: item.price * 100, // Return in subunits (cents/paise) for Next.js web admin
       exploreCategory: item.explore_category || undefined,
     };
 
+    secureLogger.info(`[Admin] Menu item created: ${item.id} in cafe ${cafeId} by user ${req.user.userId}`);
     return res.status(201).json({ success: true, data: mappedItem });
   } catch (error) {
     next(error);
@@ -1656,7 +1727,10 @@ router.patch('/menu/items/:id', managerOnly, audit('UPDATE_MENU_ITEM', 'menu'), 
       const item = await prisma.menuItem.findFirst({
         where: { id, cafe: { owner_id: req.user.userId } }
       });
-      if (!item) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!item) {
+        secureLogger.warn(`[Admin] Access denied: menu item ownership`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
 
       // Verify ownership of the new cafe if it's being changed
       const targetCafeId = req.body.cafeId || req.body.cafe_id;
@@ -1664,7 +1738,10 @@ router.patch('/menu/items/:id', managerOnly, audit('UPDATE_MENU_ITEM', 'menu'), 
         const ownedCafe = await prisma.cafe.findFirst({
           where: { id: targetCafeId, owner_id: req.user.userId }
         });
-        if (!ownedCafe) return res.status(403).json({ success: false, message: 'Access denied: You do not own the target cafe' });
+        if (!ownedCafe) {
+          secureLogger.warn(`[Admin] Access denied: you do not own the target cafe`);
+          return res.status(403).json({ success: false, message: 'Access denied: You do not own the target cafe' });
+        }
       }
     }
 
@@ -1700,14 +1777,14 @@ router.patch('/menu/items/:id', managerOnly, audit('UPDATE_MENU_ITEM', 'menu'), 
     } = req.body;
 
     const updateData: any = { ...rest };
-    if (isVeg !== undefined) updateData.is_veg = isVeg ? 1 : 0;
-    else if (is_veg !== undefined) updateData.is_veg = is_veg ? 1 : 0;
+    if (isVeg !== undefined) updateData.is_veg = isVeg;
+    else if (is_veg !== undefined) updateData.is_veg = is_veg;
 
-    if (isPopular !== undefined) updateData.is_popular = isPopular ? 1 : 0;
-    else if (is_popular !== undefined) updateData.is_popular = is_popular ? 1 : 0;
+    if (isPopular !== undefined) updateData.is_popular = isPopular;
+    else if (is_popular !== undefined) updateData.is_popular = is_popular;
 
-    if (isAvailable !== undefined) updateData.is_available = isAvailable ? 1 : 0;
-    else if (is_available !== undefined) updateData.is_available = is_available ? 1 : 0;
+    if (isAvailable !== undefined) updateData.is_available = isAvailable;
+    else if (is_available !== undefined) updateData.is_available = is_available;
 
     if (prepTimeMinutes !== undefined) updateData.prep_time_minutes = parseInt(prepTimeMinutes as string);
     else if (prep_time_minutes !== undefined) updateData.prep_time_minutes = parseInt(prep_time_minutes as string);
@@ -1770,6 +1847,7 @@ router.patch('/menu/items/:id', managerOnly, audit('UPDATE_MENU_ITEM', 'menu'), 
     const finalExploreCategory = exploreCategory !== undefined ? exploreCategory : explore_category;
     if (finalExploreCategory !== undefined) {
       if (!finalExploreCategory) {
+        secureLogger.warn(`[Admin] Menu item update missing explore category`);
         return res.status(400).json({ success: false, message: 'Explore category is compulsory' });
       }
       updateData.explore_category = finalExploreCategory;
@@ -1789,9 +1867,9 @@ router.patch('/menu/items/:id', managerOnly, audit('UPDATE_MENU_ITEM', 'menu'), 
       ...item,
       category: item.category?.name || category || 'Bespoke',
       imageUrl: item.image_url,
-      isAvailable: item.is_available === 1,
-      isVeg: item.is_veg === 1,
-      isPopular: item.is_popular === 1,
+      isAvailable: item.is_available,
+      isVeg: item.is_veg,
+      isPopular: item.is_popular,
       prepTimeMinutes: item.prep_time_minutes,
       calories: item.calories,
       caffeine: item.caffeine,
@@ -1803,6 +1881,7 @@ router.patch('/menu/items/:id', managerOnly, audit('UPDATE_MENU_ITEM', 'menu'), 
       exploreCategory: item.explore_category || undefined,
     };
 
+    secureLogger.info(`[Admin] Menu item updated: ${id} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: mappedItem });
   } catch (error) {
     next(error);
@@ -1817,6 +1896,7 @@ router.get('/analytics/export', managerOnly, async (req: AuthenticatedRequest, r
   try {
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=analytics.csv');
+    secureLogger.info(`[Admin] Analytics CSV exported by user ${req.user.userId}`);
     return res.status(200).send('Date,Revenue,Orders\n2024-01-01,1000,5');
   } catch (error) {
     next(error);
@@ -1843,6 +1923,7 @@ router.get('/audit-logs', adminOnly, async (req: AuthenticatedRequest, res: Resp
       prisma.auditLog.count()
     ]);
 
+    secureLogger.info(`[Admin] Audit logs viewed by user ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: logs,
@@ -1884,6 +1965,7 @@ router.get('/settings', managerOnly, async (req: AuthenticatedRequest, res: Resp
       return { ...s, value };
     });
 
+    secureLogger.info(`[Admin] Settings viewed by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: mappedSettings });
   } catch (error) {
     next(error);
@@ -1900,7 +1982,10 @@ router.patch('/settings/:id', managerOnly, audit('UPDATE_SETTING', 'settings'), 
     const { value } = req.body;
 
     const setting = await prisma.systemSetting.findUnique({ where: { id } });
-    if (!setting) return res.status(404).json({ success: false, message: 'Setting not found' });
+    if (!setting) {
+      secureLogger.warn(`[Admin] Setting not found: ${id}`);
+      return res.status(404).json({ success: false, message: 'Setting not found' });
+    }
 
     const stringValue = String(value);
 
@@ -1909,6 +1994,7 @@ router.patch('/settings/:id', managerOnly, audit('UPDATE_SETTING', 'settings'), 
       data: { value: stringValue }
     });
 
+    secureLogger.info(`[Admin] Setting ${id} updated by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: updated });
   } catch (error) {
     next(error);
@@ -1923,6 +2009,7 @@ router.post('/settings/batch', managerOnly, audit('BATCH_UPDATE_SETTINGS', 'sett
   try {
     const { settings } = req.body;
     if (!Array.isArray(settings)) {
+      secureLogger.warn(`[Admin] Invalid settings batch array`);
       return res.status(400).json({ success: false, message: 'Invalid settings batch array' });
     }
 
@@ -1935,6 +2022,7 @@ router.post('/settings/batch', managerOnly, audit('BATCH_UPDATE_SETTINGS', 'sett
       )
     );
 
+    secureLogger.info(`[Admin] Settings batch updated by user ${req.user.userId}`);
     return res.status(200).json({ success: true, message: 'Settings batch updated successfully' });
   } catch (error) {
     next(error);
@@ -1965,6 +2053,7 @@ router.get('/feature-flags', managerOnly, async (req: AuthenticatedRequest, res:
       flags = await prisma.featureFlag.findMany({ orderBy: { key: 'asc' } });
     }
 
+    secureLogger.info(`[Admin] Feature flags viewed by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: flags });
   } catch (error) {
     next(error);
@@ -1981,13 +2070,17 @@ router.patch('/feature-flags/:id', managerOnly, audit('TOGGLE_FEATURE_FLAG', 'fe
     const { enabled } = req.body;
 
     const flag = await prisma.featureFlag.findUnique({ where: { id } });
-    if (!flag) return res.status(404).json({ success: false, message: 'Feature flag not found' });
+    if (!flag) {
+      secureLogger.warn(`[Admin] Feature flag not found: ${id}`);
+      return res.status(404).json({ success: false, message: 'Feature flag not found' });
+    }
 
     const updated = await prisma.featureFlag.update({
       where: { id },
       data: { enabled: Boolean(enabled) }
     });
 
+    secureLogger.info(`[Admin] Feature flag ${id} toggled by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: updated });
   } catch (error) {
     next(error);
@@ -2017,6 +2110,7 @@ router.get('/roles', managerOnly, async (req: AuthenticatedRequest, res: Respons
         permissions: ['manage_reservations']
       }
     ];
+    secureLogger.info(`[Admin] Roles viewed by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: roles });
   } catch (error) {
     next(error);
@@ -2039,6 +2133,7 @@ router.get('/permissions', managerOnly, async (req: AuthenticatedRequest, res: R
       { id: 'manage_orders', name: 'Manage Live Orders', key: 'manage_orders', description: 'Track, update, and manage orders placed by customers', category: 'Orders' },
       { id: 'manage_reservations', name: 'Manage Reservations', key: 'manage_reservations', description: 'Manage table bookings and confirmation status', category: 'Reservations' }
     ];
+    secureLogger.info(`[Admin] Permissions viewed by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: permissions });
   } catch (error) {
     next(error);
@@ -2051,6 +2146,7 @@ router.get('/permissions', managerOnly, async (req: AuthenticatedRequest, res: R
  */
 router.patch('/roles/:selectedRole/permissions', managerOnly, audit('CHANGE_ROLE_PERMISSIONS', 'roles'), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
+    secureLogger.info(`[Admin] Role permissions updated by user ${req.user.userId}`);
     return res.status(200).json({ success: true, message: 'Permissions updated successfully' });
   } catch (error) {
     next(error);
@@ -2066,7 +2162,10 @@ router.post('/users', adminOnly, audit('CREATE_USER', 'user'), async (req: Authe
     const { name, email, password, role, phone } = req.body;
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) return res.status(400).json({ success: false, message: 'Email already registered' });
+    if (existingUser) {
+      secureLogger.warn(`[Admin] Email already registered: attempt by user ${req.user.userId}`);
+      return res.status(400).json({ success: false, message: 'Email already registered' });
+    }
 
     const passwordHash = await bcrypt.hash(password || 'password123', 12);
     const userId = uuidv4();
@@ -2079,10 +2178,11 @@ router.post('/users', adminOnly, audit('CREATE_USER', 'user'), async (req: Authe
         phone: phone || null,
         password_hash: passwordHash,
         role: role || 'USER',
-        is_active: 1
+        is_active: true
       }
     });
 
+    secureLogger.info(`[Admin] User created: ${user.id} by user ${req.user.userId}`);
     return res.status(201).json({
       success: true,
       data: {
@@ -2091,7 +2191,7 @@ router.post('/users', adminOnly, audit('CREATE_USER', 'user'), async (req: Authe
         email: user.email,
         phone: user.phone,
         role: user.role,
-        isActive: user.is_active === 1
+        isActive: user.is_active
       }
     });
   } catch (error) {
@@ -2109,20 +2209,24 @@ router.patch('/users/:id', adminOnly, audit('UPDATE_USER', 'user'), async (req: 
     const { name, email, phone, role, isActive } = req.body;
 
     const user = await prisma.user.findUnique({ where: { id } });
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    if (!user) {
+      secureLogger.warn(`[Admin] User not found: ${id}`);
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
 
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (email !== undefined) updateData.email = email.toLowerCase();
     if (phone !== undefined) updateData.phone = phone || null;
     if (role !== undefined) updateData.role = role;
-    if (isActive !== undefined) updateData.is_active = isActive ? 1 : 0;
+    if (isActive !== undefined) updateData.is_active = isActive;
 
     const updated = await prisma.user.update({
       where: { id },
       data: updateData
     });
 
+    secureLogger.info(`[Admin] User updated: ${id} by user ${req.user.userId}`);
     return res.status(200).json({
       success: true,
       data: {
@@ -2131,7 +2235,7 @@ router.patch('/users/:id', adminOnly, audit('UPDATE_USER', 'user'), async (req: 
         email: updated.email,
         phone: updated.phone,
         role: updated.role,
-        isActive: updated.is_active === 1
+        isActive: updated.is_active
       }
     });
   } catch (error) {
@@ -2148,11 +2252,15 @@ router.delete('/users/:id', adminOnly, audit('DELETE_USER', 'user'), async (req:
     const { id } = req.params;
 
     const user = await prisma.user.findUnique({ where: { id } });
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    if (!user) {
+      secureLogger.warn(`[Admin] User not found for deletion: ${id}`);
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
 
     if (user.role === 'CAFE_OWNER') {
       const ownedCafesCount = await prisma.cafe.count({ where: { owner_id: id } });
       if (ownedCafesCount > 0) {
+        secureLogger.warn(`[Admin] Cannot delete cafe owner ${id}: has active cafes`);
         return res.status(400).json({ success: false, message: 'Cannot delete cafe owner with active cafes. Reassign or delete the cafes first.' });
       }
     }
@@ -2168,6 +2276,7 @@ router.delete('/users/:id', adminOnly, audit('DELETE_USER', 'user'), async (req:
       await tx.user.delete({ where: { id } });
     });
 
+    secureLogger.info(`[Admin] User deleted: ${id} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, message: 'User deleted successfully' });
   } catch (error) {
     next(error);
@@ -2188,11 +2297,15 @@ router.delete('/menu/items/:id', managerOnly, audit('DELETE_MENU_ITEM', 'menu'),
       const item = await prisma.menuItem.findFirst({
         where: { id, cafe: { owner_id: req.user.userId } }
       });
-      if (!item) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!item) {
+        secureLogger.warn(`[Admin] Access denied: menu item ownership`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
     }
 
     await prisma.menuItem.delete({ where: { id } });
 
+    secureLogger.info(`[Admin] Menu item deleted: ${id} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, message: 'Menu item deleted successfully' });
   } catch (error) {
     next(error);
@@ -2256,12 +2369,13 @@ router.get('/banners', managerOnly, async (req: AuthenticatedRequest, res: Respo
       bgImage: b.bg_image,
       cafeId: b.cafe_id,
       cafeName: b.cafe?.name,
-      isActive: b.is_active === 1,
+      isActive: b.is_active,
       sortOrder: b.sort_order,
       createdAt: b.created_at,
       updatedAt: b.updated_at
     }));
 
+    secureLogger.info(`[Admin] Banners listed: ${formatted.length} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: formatted });
   } catch (error) {
     next(error);
@@ -2308,12 +2422,14 @@ router.post('/banners', managerOnly, audit('CREATE_BANNER', 'banners'), async (r
     // Cafe Owner check
     if (req.user.role === 'CAFE_OWNER') {
       if (!finalCafeId) {
+        secureLogger.warn(`[Admin] Cafe Owner must specify cafeId for banner`);
         return res.status(400).json({ success: false, message: 'Cafe Owner must specify a cafeId for the banner' });
       }
       const cafe = await prisma.cafe.findFirst({
         where: { id: finalCafeId, owner_id: req.user.userId }
       });
       if (!cafe) {
+        secureLogger.warn(`[Admin] Access denied: banner cafe ownership`);
         return res.status(403).json({ success: false, message: 'Access denied: you do not own this cafe' });
       }
     }
@@ -2342,11 +2458,12 @@ router.post('/banners', managerOnly, audit('CREATE_BANNER', 'banners'), async (r
         badge: badge || null,
         bg_image: bgImage || '',
         cafe_id: finalCafeId,
-        is_active: isActive !== undefined ? (isActive ? 1 : 0) : 1,
+        is_active: isActive !== undefined ? isActive : true,
         sort_order: sortOrder !== undefined ? parseInt(sortOrder as string) : 0
       }
     });
 
+    secureLogger.info(`[Admin] Banner created: ${banner.id} by user ${req.user.userId}`);
     return res.status(201).json({ success: true, data: banner });
   } catch (error) {
     next(error);
@@ -2374,6 +2491,7 @@ router.patch('/banners/:id', managerOnly, audit('UPDATE_BANNER', 'banners'), asy
         }
       });
       if (!banner || banner.cafe_id === null) {
+        secureLogger.warn(`[Admin] Access denied: banner ownership`);
         return res.status(403).json({ success: false, message: 'Access denied: you do not own this banner' });
       }
     }
@@ -2435,12 +2553,13 @@ router.patch('/banners/:id', managerOnly, audit('UPDATE_BANNER', 'banners'), asy
           where: { id: cafeId, owner_id: req.user.userId }
         });
         if (!cafe) {
+          secureLogger.warn(`[Admin] Access denied: target cafe ownership`);
           return res.status(403).json({ success: false, message: 'Access denied: you do not own that cafe' });
         }
       }
       updateData.cafe_id = cafeId || null;
     }
-    if (isActive !== undefined) updateData.is_active = isActive ? 1 : 0;
+    if (isActive !== undefined) updateData.is_active = isActive;
     if (sortOrder !== undefined) updateData.sort_order = parseInt(sortOrder as string);
 
     const banner = await prisma.banner.update({
@@ -2448,6 +2567,7 @@ router.patch('/banners/:id', managerOnly, audit('UPDATE_BANNER', 'banners'), asy
       data: updateData
     });
 
+    secureLogger.info(`[Admin] Banner updated: ${id} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: banner });
   } catch (error) {
     next(error);
@@ -2468,11 +2588,15 @@ router.delete('/banners/:id', managerOnly, audit('DELETE_BANNER', 'banners'), as
       const banner = await prisma.banner.findFirst({
         where: { id, cafe: { owner_id: req.user.userId } }
       });
-      if (!banner) return res.status(403).json({ success: false, message: 'Access denied' });
+      if (!banner) {
+        secureLogger.warn(`[Admin] Access denied: banner ownership`);
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
     }
 
     await prisma.banner.delete({ where: { id } });
 
+    secureLogger.info(`[Admin] Banner deleted: ${id} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, message: 'Banner deleted successfully' });
   } catch (error) {
     next(error);
@@ -2520,13 +2644,14 @@ router.get('/rewards', managerOnly, async (req: AuthenticatedRequest, res: Respo
       tierRequired: r.tier_required,
       stock: r.stock,
       totalRedeemed: r.total_redeemed,
-      isActive: r.is_active === 1,
+      isActive: r.is_active,
       validFrom: r.valid_from,
       validUntil: r.valid_until,
       cafeId: r.cafe_id,
       cafeName: r.cafe_id ? (cafeMap.get(r.cafe_id) || 'Unknown Cafe') : 'Platform-Wide'
     }));
 
+    secureLogger.info(`[Admin] Rewards listed: ${mappedRewards.length} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: mappedRewards });
   } catch (error) {
     next(error);
@@ -2555,12 +2680,14 @@ router.post('/rewards', managerOnly, audit('CREATE_REWARD', 'rewards'), async (r
 
     if (req.user.role === 'CAFE_OWNER') {
       if (!cafeId) {
+        secureLogger.warn(`[Admin] Cafe Owner reward missing cafe association`);
         return res.status(403).json({ success: false, message: 'Cafe Owners must associate rewards with their own cafes' });
       }
       const cafe = await prisma.cafe.findFirst({
         where: { id: cafeId, owner_id: req.user.userId }
       });
       if (!cafe) {
+        secureLogger.warn(`[Admin] Cafe Owner does not own target cafe for reward`);
         return res.status(403).json({ success: false, message: 'You do not own this cafe' });
       }
     }
@@ -2576,11 +2703,12 @@ router.post('/rewards', managerOnly, audit('CREATE_REWARD', 'rewards'), async (r
         points_cost: parseInt(pointsCost as string) || 100,
         tier_required: tierRequired || 'SILVER',
         stock: stock !== undefined ? parseInt(stock as string) : -1,
-        is_active: isActive !== false ? 1 : 0,
+        is_active: isActive !== false,
         cafe_id: cafeId || null
       }
     });
 
+    secureLogger.info(`[Admin] Reward created: ${reward.id} by user ${req.user.userId}`);
     return res.status(201).json({ success: true, data: reward });
   } catch (error) {
     next(error);
@@ -2613,6 +2741,7 @@ router.patch('/rewards/:id', managerOnly, audit('UPDATE_REWARD', 'rewards'), asy
     });
 
     if (!existingReward) {
+      secureLogger.warn(`[Admin] Reward not found: ${id}`);
       return res.status(404).json({ success: false, message: 'Reward not found' });
     }
 
@@ -2622,9 +2751,11 @@ router.patch('/rewards/:id', managerOnly, audit('UPDATE_REWARD', 'rewards'), asy
           where: { id: existingReward.cafe_id, owner_id: req.user.userId }
         });
         if (!ownedCafe) {
+          secureLogger.warn(`[Admin] Access denied: reward ownership`);
           return res.status(403).json({ success: false, message: 'Access denied' });
         }
       } else {
+        secureLogger.warn(`[Admin] Cannot modify global rewards`);
         return res.status(403).json({ success: false, message: 'Access denied: cannot modify global rewards' });
       }
 
@@ -2633,6 +2764,7 @@ router.patch('/rewards/:id', managerOnly, audit('UPDATE_REWARD', 'rewards'), asy
           where: { id: cafeId, owner_id: req.user.userId }
         });
         if (!newCafe) {
+          secureLogger.warn(`[Admin] Access denied: reward target cafe ownership`);
           return res.status(403).json({ success: false, message: 'Access denied: you do not own the target cafe' });
         }
       }
@@ -2647,7 +2779,7 @@ router.patch('/rewards/:id', managerOnly, audit('UPDATE_REWARD', 'rewards'), asy
     if (pointsCost !== undefined) updateData.points_cost = parseInt(pointsCost as string);
     if (tierRequired !== undefined) updateData.tier_required = tierRequired;
     if (stock !== undefined) updateData.stock = parseInt(stock as string);
-    if (isActive !== undefined) updateData.is_active = isActive ? 1 : 0;
+    if (isActive !== undefined) updateData.is_active = isActive;
     if (cafeId !== undefined) updateData.cafe_id = cafeId || null;
 
     const reward = await prisma.reward.update({
@@ -2655,6 +2787,7 @@ router.patch('/rewards/:id', managerOnly, audit('UPDATE_REWARD', 'rewards'), asy
       data: updateData
     });
 
+    secureLogger.info(`[Admin] Reward updated: ${id} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: reward });
   } catch (error) {
     next(error);
@@ -2674,6 +2807,7 @@ router.delete('/rewards/:id', managerOnly, audit('DELETE_REWARD', 'rewards'), as
     });
 
     if (!existingReward) {
+      secureLogger.warn(`[Admin] Reward not found for deletion: ${id}`);
       return res.status(404).json({ success: false, message: 'Reward not found' });
     }
 
@@ -2683,9 +2817,11 @@ router.delete('/rewards/:id', managerOnly, audit('DELETE_REWARD', 'rewards'), as
           where: { id: existingReward.cafe_id, owner_id: req.user.userId }
         });
         if (!ownedCafe) {
+          secureLogger.warn(`[Admin] Access denied: reward ownership`);
           return res.status(403).json({ success: false, message: 'Access denied' });
         }
       } else {
+        secureLogger.warn(`[Admin] Cannot delete global rewards`);
         return res.status(403).json({ success: false, message: 'Access denied: cannot delete global rewards' });
       }
     }
@@ -2694,6 +2830,7 @@ router.delete('/rewards/:id', managerOnly, audit('DELETE_REWARD', 'rewards'), as
       where: { id }
     });
 
+    secureLogger.info(`[Admin] Reward deleted: ${id} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, message: 'Reward deleted successfully' });
   } catch (error) {
     next(error);
@@ -2767,6 +2904,7 @@ router.get('/rewards/redemptions', managerOnly, async (req: AuthenticatedRequest
       }
     }));
 
+    secureLogger.info(`[Admin] Reward redemptions listed: ${mappedRedemptions.length} by user ${req.user.userId}`);
     return res.status(200).json({ success: true, data: mappedRedemptions });
   } catch (error) {
     next(error);
@@ -2804,6 +2942,7 @@ router.get('/revenue', requireAdminOrOwner, async (req: AuthenticatedRequest, re
     });
   }
 
+  secureLogger.info(`[Admin] Revenue chart fetched for user ${req.user?.userId}: ${result.length} days`);
   return res.json({ success: true, data: result });
 });
 
@@ -2836,7 +2975,7 @@ router.get('/users', requireAdminOrOwner, audit('ADMIN_LIST_USERS', 'user'), asy
     email: u.email,
     phone: u.phone,
     role: u.role,
-    isActive: u.is_active === 1,
+    isActive: u.is_active,
     walletBalance: u.wallet_balance,
     loyaltyPoints: u.loyalty_points,
     loyaltyTier: u.loyalty_tier,
@@ -2844,6 +2983,7 @@ router.get('/users', requireAdminOrOwner, audit('ADMIN_LIST_USERS', 'user'), asy
     createdAt: u.created_at,
   }));
 
+  secureLogger.info(`[Admin] Users listed: ${mapped.length} by user ${_req.user?.userId}`);
   return res.json({ success: true, data: mapped });
 });
 
@@ -2851,13 +2991,15 @@ router.patch('/users/:id/status', requireAdmin, audit('ADMIN_UPDATE_USER_STATUS'
   const { isActive } = req.body as { isActive: boolean };
   await prisma.user.update({
     where: { id: req.params.id },
-    data: { is_active: isActive ? 1 : 0 },
+    data: { is_active: isActive },
   });
+  secureLogger.info(`[Admin] User ${req.params.id} ${isActive ? 'activated' : 'suspended'} by admin ${req.user.userId}`);
   return res.json({ success: true, message: `User ${isActive ? 'activated' : 'suspended'}` });
 });
 
 router.delete('/users/:id', requireAdmin, audit('ADMIN_DELETE_USER', 'user'), async (req: AuthenticatedRequest, res: Response) => {
   await prisma.user.delete({ where: { id: req.params.id } });
+  secureLogger.info(`[Admin] User deleted: ${req.params.id} by admin ${req.user.userId}`);
   return res.json({ success: true, message: 'User deleted' });
 });
 
@@ -2881,6 +3023,7 @@ router.get('/cafes', requireAdminOrOwner, audit('ADMIN_LIST_CAFES', 'cafe'), asy
     _count: c._count,
   }));
 
+  secureLogger.info(`[Admin] Cafes listed: ${mapped.length} by user ${req.user?.userId}`);
   return res.json({ success: true, data: mapped });
 });
 
@@ -2935,11 +3078,11 @@ router.post('/cafes', requireAdmin, audit('ADMIN_CREATE_CAFE', 'cafe'), async (r
       delivery_fee: parseFloat(String(body.deliveryFee || 0)),
       min_order: parseFloat(String(body.minOrder || 0)),
       upi_id: body.upiId || null,
-      wifi: body.wifi ? 1 : 0,
-      parking: body.parking ? 1 : 0,
-      pet_friendly: body.petFriendly ? 1 : 0,
-      is_open: body.isOpen !== false ? 1 : 0,
-      is_active: 1,
+      wifi: body.wifi,
+      parking: body.parking,
+      pet_friendly: body.petFriendly,
+      is_open: body.isOpen !== false,
+      is_active: true,
       open_time: openTime,
       close_time: closeTime,
       tags: parseList(body.tags),
@@ -2947,6 +3090,7 @@ router.post('/cafes', requireAdmin, audit('ADMIN_CREATE_CAFE', 'cafe'), async (r
     },
   });
 
+  secureLogger.info(`[Admin] Cafe created: ${id} by user ${req.user?.userId}`);
   return res.status(201).json({ success: true, data: { id } });
 });
 
@@ -2955,6 +3099,7 @@ router.patch('/cafes/:id', requireAdminOrOwner, audit('ADMIN_UPDATE_CAFE', 'cafe
   if (req.user?.role === 'CAFE_OWNER') {
     const cafe = await prisma.cafe.findUnique({ where: { id: req.params.id }, select: { email: true } });
     if (!cafe || cafe.email !== req.user.email) {
+      secureLogger.warn(`[Admin] Access denied: can only edit own cafe`);
       return res.status(403).json({ success: false, message: 'You can only edit your own cafe' });
     }
   }
@@ -2998,11 +3143,11 @@ router.patch('/cafes/:id', requireAdminOrOwner, audit('ADMIN_UPDATE_CAFE', 'cafe
   if (req.user?.role !== 'CAFE_OWNER' && body.deliveryFee !== undefined) updateData.delivery_fee = parseFloat(String(body.deliveryFee));
   if (req.user?.role !== 'CAFE_OWNER' && body.minOrder !== undefined) updateData.min_order = parseFloat(String(body.minOrder));
   if (req.user?.role !== 'CAFE_OWNER' && body.upiId !== undefined) updateData.upi_id = body.upiId;
-  if (body.wifi !== undefined) updateData.wifi = body.wifi ? 1 : 0;
-  if (body.parking !== undefined) updateData.parking = body.parking ? 1 : 0;
-  if (body.petFriendly !== undefined) updateData.pet_friendly = body.petFriendly ? 1 : 0;
-  if (body.isOpen !== undefined) updateData.is_open = body.isOpen ? 1 : 0;
-  if (body.isActive !== undefined) updateData.is_active = body.isActive ? 1 : 0;
+  if (body.wifi !== undefined) updateData.wifi = body.wifi;
+  if (body.parking !== undefined) updateData.parking = body.parking;
+  if (body.petFriendly !== undefined) updateData.pet_friendly = body.petFriendly;
+  if (body.isOpen !== undefined) updateData.is_open = body.isOpen;
+  if (body.isActive !== undefined) updateData.is_active = body.isActive;
   if (openTime) updateData.open_time = openTime;
   if (closeTime) updateData.close_time = closeTime;
   if (body.tags !== undefined) updateData.tags = parseList(body.tags);
@@ -3010,11 +3155,13 @@ router.patch('/cafes/:id', requireAdminOrOwner, audit('ADMIN_UPDATE_CAFE', 'cafe
   if (body.rating !== undefined) updateData.rating = parseFloat(String(body.rating));
 
   await prisma.cafe.update({ where: { id: req.params.id }, data: updateData });
+  secureLogger.info(`[Admin] Cafe updated: ${req.params.id} by user ${req.user?.userId}`);
   return res.json({ success: true, message: 'Cafe updated' });
 });
 
 router.delete('/cafes/:id', requireAdmin, audit('ADMIN_DELETE_CAFE', 'cafe'), async (req: AuthenticatedRequest, res: Response) => {
   await prisma.cafe.delete({ where: { id: req.params.id } });
+  secureLogger.info(`[Admin] Cafe deleted: ${req.params.id} by user ${req.user?.userId}`);
   return res.json({ success: true, message: 'Cafe deleted' });
 });
 
@@ -3027,6 +3174,8 @@ router.get('/cafes/:cafeId/tables', requireAdminOrOwner, async (req: Authenticat
     where: { cafe_id: req.params.cafeId },
     orderBy: { table_number: 'asc' },
   });
+  secureLogger.info(`[Admin] Cafe tables listed: cafe ${req.params.cafeId}, ${tables.length} tables`);
+  secureLogger.info(`[Admin] Cafe tables listed: cafe ${req.params.cafeId}, ${tables.length} tables`);
   return res.json({ success: true, data: tables });
 });
 
@@ -3043,6 +3192,7 @@ router.post('/cafes/:cafeId/tables', requireAdminOrOwner, async (req: Authentica
       position_y: parseFloat(String(body.position_y || body.positionY || 0)),
     },
   });
+  secureLogger.info(`[Admin] Table created in cafe ${req.params.cafeId} by user ${req.user?.userId}`);
   return res.status(201).json({ success: true, data: table });
 });
 
@@ -3052,14 +3202,16 @@ router.patch('/tables/:id', requireAdminOrOwner, async (req: AuthenticatedReques
   if (body.tableNumber !== undefined) updateData.table_number = body.tableNumber;
   if (body.capacity !== undefined) updateData.capacity = parseInt(String(body.capacity), 10);
   if (body.floor !== undefined) updateData.floor = body.floor;
-  if (body.isAvailable !== undefined) updateData.is_available = body.isAvailable ? 1 : 0;
+  if (body.isAvailable !== undefined) updateData.is_available = body.isAvailable;
 
   await prisma.table.update({ where: { id: req.params.id }, data: updateData });
+  secureLogger.info(`[Admin] Table updated: ${req.params.id} by user ${req.user?.userId}`);
   return res.json({ success: true, message: 'Table updated' });
 });
 
 router.delete('/tables/:id', requireAdminOrOwner, async (req: AuthenticatedRequest, res: Response) => {
   await prisma.table.delete({ where: { id: req.params.id } });
+  secureLogger.info(`[Admin] Table deleted: ${req.params.id} by user ${req.user?.userId}`);
   return res.json({ success: true, message: 'Table deleted' });
 });
 
@@ -3103,12 +3255,14 @@ router.get('/orders', requireAdminOrOwner, audit('ADMIN_LIST_ORDERS', 'order'), 
     cafe: o.cafe,
   }));
 
+  secureLogger.info(`[Admin] Orders listed: ${mapped.length} by user ${req.user?.userId}`);
   return res.json({ success: true, data: mapped });
 });
 
 router.patch('/orders/:id', requireAdminOrOwner, audit('ADMIN_UPDATE_ORDER', 'order'), async (req: AuthenticatedRequest, res: Response) => {
   const { status } = req.body as { status: string };
   await prisma.order.update({ where: { id: req.params.id }, data: { status } });
+  secureLogger.info(`[Admin] Order ${req.params.id} status -> ${status} by user ${req.user?.userId}`);
   return res.json({ success: true, message: 'Order status updated' });
 });
 
@@ -3146,12 +3300,14 @@ router.get('/reservations', requireAdminOrOwner, audit('ADMIN_LIST_RESERVATIONS'
     table: r.table,
   }));
 
+  secureLogger.info(`[Admin] Reservations listed: ${mapped.length} by user ${req.user?.userId}`);
   return res.json({ success: true, data: mapped });
 });
 
 router.patch('/reservations/:id', requireAdminOrOwner, audit('ADMIN_UPDATE_RESERVATION', 'reservation'), async (req: AuthenticatedRequest, res: Response) => {
   const { status } = req.body as { status: string };
   await prisma.reservation.update({ where: { id: req.params.id }, data: { status } });
+  secureLogger.info(`[Admin] Reservation ${req.params.id} status -> ${status} by user ${req.user?.userId}`);
   return res.json({ success: true, message: 'Reservation updated' });
 });
 
@@ -3173,17 +3329,18 @@ router.get('/cafe-owners', requireAdmin, audit('ADMIN_LIST_CAFE_OWNERS', 'user')
     owners.map(o => prisma.cafe.count({ where: { email: o.email } }))
   );
 
-  const statusFor = (owner: { is_active: number; auth_provider: string }) => {
+  const statusFor = (owner: { is_active: boolean; auth_provider: string }) => {
     if (owner.auth_provider === 'owner_rejected') return 'REJECTED';
-    if (owner.is_active === 1) return 'APPROVED';
+    if (owner.is_active) return 'APPROVED';
     return 'PENDING_APPROVAL';
   };
 
+  secureLogger.info(`[Admin] Cafe owners listed by user ${_req.user?.userId}`);
   return res.json({
     success: true,
     data: owners.map((o, index) => ({
       ...o,
-      isActive: o.is_active === 1,
+      isActive: o.is_active,
       verificationStatus: statusFor(o),
       _count: { ownedCafes: cafeCounts[index] },
     })),
@@ -3194,7 +3351,10 @@ router.post('/cafe-owners', requireAdmin, audit('ADMIN_CREATE_CAFE_OWNER', 'user
   const { name, email, password, phone } = req.body as { name: string; email: string; password: string; phone?: string };
 
   const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) return res.status(409).json({ success: false, message: 'Email already registered' });
+  if (existing) {
+    secureLogger.warn(`[Admin] Cafe owner email already registered: ${email}`);
+    return res.status(409).json({ success: false, message: 'Email already registered' });
+  }
 
   const passwordHash = await bcrypt.hash(password || uuidv4(), 12);
   const id = uuidv4();
@@ -3203,6 +3363,7 @@ router.post('/cafe-owners', requireAdmin, audit('ADMIN_CREATE_CAFE_OWNER', 'user
     data: { id, name, email, phone: phone || null, password_hash: passwordHash, role: 'CAFE_OWNER' },
   });
 
+  secureLogger.info(`[Admin] Cafe owner created: ${id} by admin ${req.user?.userId}`);
   return res.status(201).json({ success: true, data: { id } });
 });
 
@@ -3211,16 +3372,17 @@ router.patch('/cafe-owners/:id', requireAdmin, audit('ADMIN_UPDATE_CAFE_OWNER', 
   const updateData: any = {};
   if (body.name) updateData.name = body.name;
   if (body.phone !== undefined) updateData.phone = body.phone;
-  if (body.isActive !== undefined) updateData.is_active = body.isActive ? 1 : 0;
+  if (body.isActive !== undefined) updateData.is_active = body.isActive;
 
   await prisma.user.update({ where: { id: req.params.id }, data: updateData });
+  secureLogger.info(`[Admin] Cafe owner updated: ${req.params.id} by admin ${req.user?.userId}`);
   return res.json({ success: true, message: 'Cafe owner updated' });
 });
 
 router.post('/cafe-owners/:id/approve', requireAdmin, audit('ADMIN_APPROVE_CAFE_OWNER', 'user'), async (req: AuthenticatedRequest, res: Response) => {
   const owner = await prisma.user.update({
     where: { id: req.params.id },
-    data: { role: 'CAFE_OWNER', is_active: 1, auth_provider: 'password', verification_status: 'APPROVED' },
+    data: { role: 'CAFE_OWNER', is_active: true, auth_provider: 'password', verification_status: 'APPROVED' },
     select: { id: true, email: true },
   });
 
@@ -3231,9 +3393,10 @@ router.post('/cafe-owners/:id/approve', requireAdmin, audit('ADMIN_APPROVE_CAFE_
         { email: owner.email },
       ],
     },
-    data: { is_active: 1 },
+    data: { is_active: true },
   });
 
+  secureLogger.info(`[Admin] Cafe owner approved: ${req.params.id} by admin ${req.user.userId}`);
   return res.json({ success: true, status: 'APPROVED', message: 'Cafe owner approved' });
 });
 
@@ -3244,13 +3407,14 @@ router.post('/cafe-owners/:id/reject', requireAdmin, audit('ADMIN_REJECT_CAFE_OW
   });
 
   if (!owner) {
+    secureLogger.warn(`[Admin] Cafe owner application not found: ${req.params.id}`);
     return res.status(404).json({ success: false, message: 'Cafe owner application not found' });
   }
 
   await prisma.$transaction(async (tx) => {
     await tx.cafe.deleteMany({
       where: {
-        is_active: 0,
+        is_active: false,
         OR: [
           { owner_id: owner.id },
           { email: owner.email },
@@ -3261,12 +3425,14 @@ router.post('/cafe-owners/:id/reject', requireAdmin, audit('ADMIN_REJECT_CAFE_OW
     await tx.user.delete({ where: { id: owner.id } });
   });
 
+  secureLogger.info(`[Admin] Cafe owner rejected: ${req.params.id} by admin ${req.user.userId}`);
   return res.json({ success: true, status: 'REJECTED', message: 'Cafe owner application denied and deleted' });
 });
 
 router.delete('/cafe-owners/:id', requireAdmin, audit('ADMIN_DELETE_CAFE_OWNER', 'user'), async (req: AuthenticatedRequest, res: Response) => {
   // Downgrade to USER instead of deleting to preserve referential integrity
-  await prisma.user.update({ where: { id: req.params.id }, data: { role: 'USER', is_active: 0 } });
+  await prisma.user.update({ where: { id: req.params.id }, data: { role: 'USER', is_active: false } });
+  secureLogger.info(`[Admin] Cafe owner access revoked: ${req.params.id} by admin ${req.user.userId}`);
   return res.json({ success: true, message: 'Cafe owner access revoked' });
 });
 
@@ -3287,6 +3453,7 @@ router.get('/menu/items', requireAdminOrOwner, async (req: AuthenticatedRequest,
     take: 500,
   });
 
+  secureLogger.info(`[Admin] Menu items listed: ${items.length} by user ${req.user?.userId}`);
   return res.json({
     success: true,
     data: items.map(i => ({
@@ -3295,9 +3462,9 @@ router.get('/menu/items', requireAdminOrOwner, async (req: AuthenticatedRequest,
       description: i.description,
       price: i.price,
       imageUrl: i.image_url,
-      isAvailable: i.is_available === 1,
-      isVeg: i.is_veg === 1,
-      isPopular: i.is_popular === 1,
+      isAvailable: i.is_available,
+      isVeg: i.is_veg,
+      isPopular: i.is_popular,
       stockQuantity: i.stock_quantity,
       prepTimeMinutes: i.prep_time_minutes,
       calories: i.calories,
@@ -3314,6 +3481,7 @@ router.get('/menu/items', requireAdminOrOwner, async (req: AuthenticatedRequest,
 router.post('/menu/items', requireAdminOrOwner, async (req: AuthenticatedRequest, res: Response) => {
   const body = req.body as any;
   if (!body.exploreCategory) {
+    secureLogger.warn(`[Admin] Menu item creation missing explore category`);
     return res.status(400).json({ success: false, message: 'Explore category is compulsory' });
   }
   const item = await prisma.menuItem.create({
@@ -3325,15 +3493,16 @@ router.post('/menu/items', requireAdminOrOwner, async (req: AuthenticatedRequest
       description: body.description || null,
       price: parseFloat(String(body.price || 0)),
       image_url: body.imageUrl || null,
-      is_available: body.isAvailable !== false ? 1 : 0,
-      is_veg: body.isVeg ? 1 : 0,
-      is_popular: body.isPopular ? 1 : 0,
+      is_available: body.isAvailable !== false,
+      is_veg: body.isVeg,
+      is_popular: body.isPopular,
       stock_quantity: parseInt(String(body.stockQuantity || 999), 10),
       prep_time_minutes: parseInt(String(body.prepTimeMinutes || 10), 10),
       calories: body.calories ? parseInt(String(body.calories), 10) : null,
       explore_category: body.exploreCategory,
     },
   });
+  secureLogger.info(`[Admin] Menu item created: ${item.id} by user ${req.user?.userId}`);
   return res.status(201).json({ success: true, data: { id: item.id } });
 });
 
@@ -3344,9 +3513,9 @@ router.patch('/menu/items/:id', requireAdminOrOwner, async (req: AuthenticatedRe
   if (body.description !== undefined) updateData.description = body.description;
   if (body.price !== undefined) updateData.price = parseFloat(String(body.price));
   if (body.imageUrl !== undefined) updateData.image_url = body.imageUrl;
-  if (body.isAvailable !== undefined) updateData.is_available = body.isAvailable ? 1 : 0;
-  if (body.isVeg !== undefined) updateData.is_veg = body.isVeg ? 1 : 0;
-  if (body.isPopular !== undefined) updateData.is_popular = body.isPopular ? 1 : 0;
+  if (body.isAvailable !== undefined) updateData.is_available = body.isAvailable;
+  if (body.isVeg !== undefined) updateData.is_veg = body.isVeg;
+  if (body.isPopular !== undefined) updateData.is_popular = body.isPopular;
   if (body.stockQuantity !== undefined) updateData.stock_quantity = parseInt(String(body.stockQuantity), 10);
   if (body.prepTimeMinutes !== undefined) updateData.prep_time_minutes = parseInt(String(body.prepTimeMinutes), 10);
   if (body.calories !== undefined) updateData.calories = body.calories ? parseInt(String(body.calories), 10) : null;
@@ -3354,17 +3523,20 @@ router.patch('/menu/items/:id', requireAdminOrOwner, async (req: AuthenticatedRe
   
   if (body.exploreCategory !== undefined) {
     if (!body.exploreCategory) {
+      secureLogger.warn(`[Admin] Menu item update missing explore category`);
       return res.status(400).json({ success: false, message: 'Explore category is compulsory' });
     }
     updateData.explore_category = body.exploreCategory;
   }
 
   await prisma.menuItem.update({ where: { id: req.params.id }, data: updateData });
+  secureLogger.info(`[Admin] Menu item updated: ${req.params.id} by user ${req.user?.userId}`);
   return res.json({ success: true, message: 'Menu item updated' });
 });
 
 router.delete('/menu/items/:id', requireAdminOrOwner, async (req: AuthenticatedRequest, res: Response) => {
   await prisma.menuItem.delete({ where: { id: req.params.id } });
+  secureLogger.info(`[Admin] Menu item deleted: ${req.params.id} by user ${req.user?.userId}`);
   return res.json({ success: true, message: 'Menu item deleted' });
 });
 
@@ -3375,6 +3547,7 @@ router.get('/menu/categories', requireAdminOrOwner, async (req: AuthenticatedReq
   if (cafeId || cafe_id) where.cafe_id = cafeId || cafe_id;
 
   const categories = await prisma.menuCategory.findMany({ where, orderBy: { sort_order: 'asc' } });
+  secureLogger.info(`[Admin] Menu categories listed: ${categories.length} by user ${req.user?.userId}`);
   return res.json({ success: true, data: categories });
 });
 
@@ -3407,14 +3580,15 @@ function mapBanner(b: any) {
     bgImage: b.bg_image,
     cafeId: b.cafe_id,
     exploreCategory: b.explore_category || undefined,
-    isActive: b.is_active === 1,
+    isActive: b.is_active,
     sortOrder: b.sort_order,
     createdAt: b.created_at,
   };
 }
 
-router.get('/banners', requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+router.get('/banners', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   const banners = await (prisma as any).banner.findMany({ orderBy: { sort_order: 'asc' } });
+  secureLogger.info(`[Admin] Banners listed by user ${req.user?.userId}`);
   return res.json({ success: true, data: banners.map(mapBanner) });
 });
 
@@ -3445,10 +3619,11 @@ router.post('/banners', requireAdmin, async (req: AuthenticatedRequest, res: Res
       bg_image: body.bgImage || '',
       cafe_id: body.cafeId || null,
       explore_category: body.exploreCategory || null,
-      is_active: body.isActive !== false ? 1 : 0,
+      is_active: body.isActive !== false,
       sort_order: parseInt(String(body.sortOrder || 0), 10),
     },
   });
+  secureLogger.info(`[Admin] Banner created by user ${req.user?.userId}`);
   return res.status(201).json({ success: true, data: mapBanner(banner) });
 });
 
@@ -3477,18 +3652,20 @@ router.patch('/banners/:id', requireAdmin, async (req: AuthenticatedRequest, res
   if (body.bgImage !== undefined) updateData.bg_image = body.bgImage;
   if (body.cafeId !== undefined) updateData.cafe_id = body.cafeId || null;
   if (body.exploreCategory !== undefined) updateData.explore_category = body.exploreCategory || null;
-  if (body.isActive !== undefined) updateData.is_active = body.isActive ? 1 : 0;
+  if (body.isActive !== undefined) updateData.is_active = body.isActive;
   if (body.sortOrder !== undefined) updateData.sort_order = parseInt(String(body.sortOrder), 10);
 
   const banner = await (prisma as any).banner.update({
     where: { id: req.params.id },
     data: updateData,
   });
+  secureLogger.info(`[Admin] Banner updated: ${req.params.id} by user ${req.user?.userId}`);
   return res.json({ success: true, data: mapBanner(banner) });
 });
 
 router.delete('/banners/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   await (prisma as any).banner.delete({ where: { id: req.params.id } });
+  secureLogger.info(`[Admin] Banner deleted: ${req.params.id} by user ${req.user?.userId}`);
   return res.json({ success: true, message: 'Banner deleted' });
 });
 
@@ -3496,12 +3673,13 @@ router.delete('/banners/:id', requireAdmin, async (req: AuthenticatedRequest, re
 // REWARDS (Admin CRUD)
 // ─────────────────────────────────────────────────────────────
 
-router.get('/rewards', requireAdminOrOwner, async (_req: AuthenticatedRequest, res: Response) => {
+router.get('/rewards', requireAdminOrOwner, async (req: AuthenticatedRequest, res: Response) => {
   const rewards = await prisma.reward.findMany({ orderBy: { created_at: 'desc' } });
   const mapped = rewards.map(r => ({
     ...r,
-    approvalStatus: r.stock === -2 ? 'REJECTED' : r.is_active === 1 ? 'ACTIVE' : 'PENDING_APPROVAL',
+    approvalStatus: r.stock === -2 ? 'REJECTED' : r.is_active ? 'ACTIVE' : 'PENDING_APPROVAL',
   }));
+  secureLogger.info(`[Admin] Rewards listed: ${mapped.length} by user ${req.user?.userId}`);
   return res.json({ success: true, data: mapped });
 });
 
@@ -3517,9 +3695,10 @@ router.post('/rewards', requireAdminOrOwner, async (req: AuthenticatedRequest, r
       points_cost: parseInt(String(body.pointsCost || body.points_cost || 100), 10),
       tier_required: body.tierRequired || body.tier_required || 'SILVER',
       stock: parseInt(String(body.stock || -1), 10),
-      is_active: req.user?.role === 'CAFE_OWNER' ? 0 : body.isActive !== false ? 1 : 0,
+      is_active: req.user?.role === 'CAFE_OWNER' ? false : body.isActive !== false,
     },
   });
+  secureLogger.info(`[Admin] Reward created: ${reward.id} by user ${req.user?.userId}`);
   return res.status(201).json({
     success: true,
     status: req.user?.role === 'CAFE_OWNER' ? 'PENDING_APPROVAL' : 'ACTIVE',
@@ -3537,34 +3716,38 @@ router.patch('/rewards/:id', requireAdmin, async (req: AuthenticatedRequest, res
   if (body.pointsCost !== undefined) updateData.points_cost = parseInt(String(body.pointsCost), 10);
   if (body.tierRequired !== undefined) updateData.tier_required = body.tierRequired;
   if (body.stock !== undefined) updateData.stock = parseInt(String(body.stock), 10);
-  if (body.isActive !== undefined) updateData.is_active = body.isActive ? 1 : 0;
+  if (body.isActive !== undefined) updateData.is_active = body.isActive;
 
   await prisma.reward.update({ where: { id: req.params.id }, data: updateData });
+  secureLogger.info(`[Admin] Reward updated: ${req.params.id} by user ${req.user?.userId}`);
   return res.json({ success: true, message: 'Reward updated' });
 });
 
 router.post('/rewards/:id/approve', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   await prisma.reward.update({
     where: { id: req.params.id },
-    data: { is_active: 1, stock: -1 },
+    data: { is_active: true, stock: -1 },
   });
+  secureLogger.info(`[Admin] Reward approved: ${req.params.id} by admin ${req.user?.userId}`);
   return res.json({ success: true, status: 'ACTIVE', message: 'Reward approved' });
 });
 
 router.post('/rewards/:id/reject', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   await prisma.reward.update({
     where: { id: req.params.id },
-    data: { is_active: 0, stock: -2 },
+    data: { is_active: false, stock: -2 },
   });
+  secureLogger.info(`[Admin] Reward rejected: ${req.params.id} by admin ${req.user?.userId}`);
   return res.json({ success: true, status: 'REJECTED', message: 'Reward rejected' });
 });
 
 router.delete('/rewards/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
-  await prisma.reward.update({ where: { id: req.params.id }, data: { is_active: 0 } });
+  await prisma.reward.update({ where: { id: req.params.id }, data: { is_active: false } });
+  secureLogger.info(`[Admin] Reward deactivated: ${req.params.id} by admin ${req.user?.userId}`);
   return res.json({ success: true, message: 'Reward deactivated' });
 });
 
-router.get('/rewards/redemptions', requireAdminOrOwner, async (_req: AuthenticatedRequest, res: Response) => {
+router.get('/rewards/redemptions', requireAdminOrOwner, async (req: AuthenticatedRequest, res: Response) => {
   const redemptions = await prisma.redeemedReward.findMany({
     include: {
       user: { select: { name: true, email: true } },
@@ -3573,6 +3756,7 @@ router.get('/rewards/redemptions', requireAdminOrOwner, async (_req: Authenticat
     orderBy: { created_at: 'desc' },
     take: 100,
   });
+  secureLogger.info(`[Admin] Redemptions listed: ${redemptions.length} by user ${req.user?.userId}`);
   return res.json({ success: true, data: redemptions });
 });
 
@@ -3580,11 +3764,12 @@ router.get('/rewards/redemptions', requireAdminOrOwner, async (_req: Authenticat
 // EXPLORE CATEGORIES (Admin CRUD)
 // ─────────────────────────────────────────────────────────────
 
-router.get('/explore-categories', requireAdminOrOwner, async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+router.get('/explore-categories', requireAdminOrOwner, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const categories = await prisma.exploreCategory.findMany({
       orderBy: { sort_order: 'asc' },
     });
+    secureLogger.info(`[Admin] Explore categories listed by user ${req.user?.userId}`);
     return res.json({
       success: true,
       data: categories.map(cat => ({
@@ -3611,6 +3796,7 @@ router.post('/explore-categories', requireAdmin, async (req: AuthenticatedReques
     const body = req.body as any;
     const name = body.name?.trim();
     if (!name) {
+      secureLogger.warn(`[Admin] Explore category name is required`);
       return res.status(400).json({ success: false, message: 'Category name is required' });
     }
 
@@ -3621,6 +3807,7 @@ router.post('/explore-categories', requireAdmin, async (req: AuthenticatedReques
       where: { OR: [{ name }, { slug }] },
     });
     if (existing) {
+      secureLogger.warn(`[Admin] Explore category with same name/slug already exists`);
       return res.status(400).json({ success: false, message: 'Category with this name or slug already exists' });
     }
 
@@ -3638,6 +3825,7 @@ router.post('/explore-categories', requireAdmin, async (req: AuthenticatedReques
       },
     });
 
+    secureLogger.info(`[Admin] Explore category created: ${category.id} by user ${req.user?.userId}`);
     return res.status(201).json({
       success: true,
       data: {
@@ -3679,6 +3867,7 @@ router.patch('/explore-categories/:id', requireAdmin, async (req: AuthenticatedR
       data: updateData,
     });
 
+    secureLogger.info(`[Admin] Explore category updated: ${req.params.id} by admin ${req.user?.userId}`);
     return res.json({
       success: true,
       data: {
@@ -3701,7 +3890,125 @@ router.patch('/explore-categories/:id', requireAdmin, async (req: AuthenticatedR
 router.delete('/explore-categories/:id', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     await prisma.exploreCategory.delete({ where: { id: req.params.id } });
+    secureLogger.info(`[Admin] Explore category deleted: ${req.params.id} by admin ${req.user?.userId}`);
     return res.json({ success: true, message: 'Explore category deleted' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── POST /admin/notifications/send ──────────────────────────────────────────────
+const sendNotificationSchema = z.object({
+  title: z.string().min(1).max(200),
+  body: z.string().min(1).max(2000),
+  targetAudience: z.enum(['all', 'city', 'subscribers']),
+  city: z.string().optional(),
+  type: z.string().optional().default('ADMIN_ANNOUNCEMENT'),
+});
+
+router.post('/notifications/send', requireAdmin, validate({ body: sendNotificationSchema }), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const { title, body, targetAudience, city, type } = req.body;
+
+    let userFilter: any = {};
+    if (targetAudience === 'subscribers') {
+      userFilter = { is_subscribed: true, subscription_expires_at: { gte: new Date() } };
+    }
+    if (targetAudience === 'city') {
+      userFilter = { city };
+    }
+
+    // Create in-app notification for all matching users
+    const users = await prisma.user.findMany({
+      where: targetAudience === 'all' ? undefined : userFilter,
+      select: { id: true },
+    });
+
+    for (const user of users) {
+      await prisma.notification.create({
+        data: {
+          id: uuidv4(),
+          user_id: user.id,
+          title,
+          body,
+          type,
+          data: JSON.stringify({ targetAudience, city: city || null, sentBy: req.user?.userId }),
+        },
+      }).catch(() => {});
+    }
+
+    // Send push notification
+    const { sent, failed } = await sendBulkPushNotification(title, body, { type, targetAudience: targetAudience || 'all' });
+
+    await prisma.auditLog.create({
+      data: {
+        id: uuidv4(),
+        request_id: req.requestId || '',
+        user_id: req.user?.userId,
+        action: 'SEND_NOTIFICATION',
+        resource_type: 'notification',
+        resource_id: null,
+        ip_address: req.ip,
+        user_agent: req.headers['user-agent'] || '',
+        metadata: JSON.stringify({ title, targetAudience, totalUsers: users.length, pushSent: sent, pushFailed: failed }),
+      },
+    }).catch(() => {});
+
+    secureLogger.info(`[Admin] Notification sent by ${req.user?.userId}: "${title}" to ${users.length} users (${targetAudience}), push: ${sent} sent, ${failed} failed`);
+    return res.json({
+      success: true,
+      message: `Notification sent to ${users.length} users`,
+      stats: { inApp: users.length, pushSent: sent, pushFailed: failed },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── GET /admin/notifications/history ────────────────────────────────────────────
+router.get('/notifications/history', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const logs = await prisma.auditLog.findMany({
+      where: { action: 'SEND_NOTIFICATION' },
+      orderBy: { created_at: 'desc' },
+      take: 50,
+      select: { created_at: true, metadata: true, ip_address: true },
+    });
+
+    secureLogger.info(`[Admin] Notification history viewed by ${req.user?.userId}: ${logs.length} entries`);
+    return res.json({
+      success: true,
+      data: logs.map((log) => {
+        const meta = tryParse(log.metadata, {}) as Record<string, any>;
+        return {
+          sentAt: log.created_at,
+          title: meta?.title || 'Unknown',
+          targetAudience: meta?.targetAudience || 'all',
+          totalUsers: meta?.totalUsers || 0,
+          pushSent: meta?.pushSent || 0,
+        };
+      }),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── POST /admin/subscriptions/expire-stale ──────────────────────────────────────
+router.post('/subscriptions/expire-stale', requireAdmin, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const now = new Date();
+    const expired = await prisma.user.updateMany({
+      where: { is_subscribed: true, subscription_expires_at: { lt: now } },
+      data: { is_subscribed: false },
+    });
+
+    secureLogger.info(`[Admin] Stale subscriptions expired: ${expired.count} by admin ${req.user?.userId}`);
+    return res.json({
+      success: true,
+      message: `Expired ${expired.count} stale subscriptions`,
+      expiredCount: expired.count,
+    });
   } catch (error) {
     next(error);
   }

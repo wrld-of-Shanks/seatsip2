@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -15,17 +15,21 @@ model User {
   password_hash         String
   role                  String               @default("USER")
   avatar                String?
-  wallet_balance        Float                @default(0)
-  loyalty_points        Int                 @default(0)
+  wallet_balance        Decimal              @default(0) @db.Decimal(12,2)
+  loyalty_points        Int                  @default(0)
   loyalty_tier          String               @default("silver")
+  is_subscribed         Boolean              @default(false)
+  subscription_expires_at DateTime?
+  last_activity_at      DateTime?
+  total_lifetime_points Int                  @default(0)
+  points_cap            Int                  @default(50000)
   failed_login_count    Int                  @default(0)
   lockout_until         DateTime?
   last_failed_login_at  DateTime?
-  is_active             Int                  @default(1)
+  is_active             Boolean              @default(true)
   google_id             String?              @unique
   auth_provider         String               @default("password")
-  push_token            String?
-  push_token_updated_at DateTime?
+  push_tokens           DevicePushToken[]
   deletion_scheduled_at DateTime?
   terms_accepted_at      DateTime?
   government_id         String?
@@ -44,8 +48,103 @@ model User {
   tier_history          LoyaltyTierHistory[]
   redeemed_rewards      RedeemedReward[]
   owned_cafes           Cafe[]               @relation(name: "UserOwnedCafes")
+  subscription          Subscription?
+  points_transactions   PointsTransaction[]
+  redeemed_offers       RedeemedOffer[]
 
   @@map("users")
+}
+
+model DevicePushToken {
+  id         String   @id
+  user_id    String
+  token      String   @unique
+  platform   String   @default("unknown")
+  created_at DateTime @default(now())
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("device_push_tokens")
+}
+
+model IdempotencyKey {
+  id              String   @id
+  razorpay_payment_id String? @unique
+  raw_event_id    String?  @unique
+  processed_at    DateTime @default(now())
+
+  @@map("idempotency_keys")
+}
+
+model Subscription {
+  id              String    @id
+  user_id         String    @unique
+  plan_type       String    @default("MONTHLY")
+  status          String    @default("ACTIVE")
+  started_at      DateTime  @default(now())
+  expires_at      DateTime
+  cancelled_at    DateTime?
+  auto_renew      Boolean   @default(true)
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  user            User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model PointsTransaction {
+  id              String    @id
+  user_id         String
+  type            String
+  amount          Int
+  balance_before  Int
+  balance_after   Int
+  description     String?
+  reference_type  String?
+  reference_id    String?
+  multiplier      Float     @default(1.0)
+  created_at      DateTime  @default(now())
+  user            User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([created_at])
+  @@map("points_transactions")
+}
+
+model Offer {
+  id              String    @id
+  title           String
+  description     String?
+  type            String
+  multiplier      Float?    @default(1.0)
+  points_bonus    Int?
+  code            String?   @unique
+  min_tier        String?   @default("silver")
+  subscriber_only Boolean   @default(false)
+  max_redemptions Int       @default(-1)
+  times_redeemed  Int       @default(0)
+  is_active       Boolean   @default(true)
+  valid_from      DateTime
+  valid_until     DateTime
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  redemptions     RedeemedOffer[]
+
+  @@map("offers")
+}
+
+model RedeemedOffer {
+  id            String    @id
+  user_id       String
+  offer_id      String
+  points_earned Int       @default(0)
+  multiplier    Float?    @default(1.0)
+  created_at    DateTime  @default(now())
+  user          User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  offer         Offer     @relation(fields: [offer_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("redeemed_offers")
 }
 
 model RefreshToken {
@@ -81,19 +180,19 @@ model Cafe {
   rating            Float          @default(0)
   review_count      Int            @default(0)
   price_level       Int            @default(2)
-  is_open           Int            @default(1)
+  is_open           Boolean        @default(true)
   open_time         String         @default("08:00")
   close_time        String         @default("22:00")
   reservation_slots String         @default("[\"09:00\",\"11:00\",\"13:00\",\"15:00\",\"17:00\",\"19:00\"]")
-  wifi              Int            @default(1)
-  parking           Int            @default(0)
-  pet_friendly      Int            @default(0)
+  wifi              Boolean        @default(true)
+  parking           Boolean        @default(false)
+  pet_friendly      Boolean        @default(false)
   moods             String         @default("[]")
   tags              String         @default("[]")
   prep_time_minutes Int            @default(15)
   delivery_fee      Float          @default(0)
   min_order         Float          @default(0)
-  is_active         Int            @default(1)
+  is_active         Boolean        @default(true)
   priority          Int            @default(0)
   upi_id            String?
   razorpay_account_id String?
@@ -129,7 +228,7 @@ model Table {
   floor        String        @default("Ground")
   position_x   Float         @default(0)
   position_y   Float         @default(0)
-  is_available Int           @default(1)
+  is_available Boolean       @default(true)
   created_at   DateTime      @default(now())
   reservations Reservation[]
   cafe         Cafe          @relation(fields: [cafe_id], references: [id], onDelete: Cascade)
@@ -143,7 +242,7 @@ model MenuCategory {
   name        String
   description String?
   sort_order  Int        @default(0)
-  is_active   Int        @default(1)
+  is_active   Boolean    @default(true)
   created_at  DateTime   @default(now())
   cafe        Cafe       @relation(fields: [cafe_id], references: [id], onDelete: Cascade)
   items       MenuItem[]
@@ -159,10 +258,10 @@ model MenuItem {
   description       String?
   price             Float
   image_url         String?
-  is_available      Int           @default(1)
+  is_available      Boolean       @default(true)
   stock_quantity    Int           @default(999)
-  is_veg            Int           @default(0)
-  is_popular        Int           @default(0)
+  is_veg            Boolean       @default(false)
+  is_popular        Boolean       @default(false)
   prep_time_minutes Int           @default(10)
   calories          Int?
   caffeine          Int?
@@ -339,7 +438,7 @@ model Notification {
   body       String
   type       String   @default("GENERAL")
   data       String   @default("{}")
-  is_read    Int      @default(0)
+  is_read    Boolean  @default(false)
   created_at DateTime @default(now())
   user       User     @relation(fields: [user_id], references: [id])
 
@@ -371,7 +470,7 @@ model Reward {
   tier_required  String           @default("SILVER") // SILVER | GOLD | PLATINUM
   stock          Int              @default(-1)        // -1 = unlimited
   total_redeemed Int              @default(0)
-  is_active      Int              @default(1)
+  is_active      Boolean          @default(true)
   valid_from     DateTime?
   valid_until    DateTime?
   cafe_id        String?                              // null = all cafes
@@ -426,7 +525,7 @@ model Banner {
   cafe_id           String?
   cafe              Cafe?    @relation(fields: [cafe_id], references: [id], onDelete: SetNull)
   explore_category  String?
-  is_active         Int      @default(1)
+  is_active         Boolean  @default(true)
   sort_order        Int      @default(0)
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
