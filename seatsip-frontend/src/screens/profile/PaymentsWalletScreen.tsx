@@ -369,7 +369,7 @@ export default function PaymentsWalletScreen() {
     [loadTransactions, refreshUser, user?.email, user?.name, user?.phone],
   );
 
-  const walletDisplay = (user?.wallet_balance ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  const walletDisplay = (Number(user?.wallet_balance) || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
   const pointsDisplay = user?.loyalty_points ?? 0;
 
   return (

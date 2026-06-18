@@ -19,7 +19,7 @@ import {
 } from '../common/auth';
 import { AuthenticatedRequest } from '../types/authenticated-request';
 import { audit, validate } from '../security/http';
-import { authLoginLimiter, authRefreshLimiter, authRegisterLimiter } from '../security/rateLimit';
+import { authLoginLimiter, authRefreshLimiter, authRegisterLimiter, otpLimiter } from '../security/rateLimit';
 import { secureLogger } from '../security/logger';
 import { isGoogleAuthConfigured, verifyGoogleIdToken } from '../services/googleVerify';
 import {
@@ -858,6 +858,7 @@ router.post(
 
 router.post(
   '/forgot-password/request',
+  otpLimiter,
   validate({ body: requestForgotOtpSchema }),
   audit('FORGOT_PASSWORD_REQUEST', 'auth'),
   async (req, res) => {
@@ -888,6 +889,7 @@ router.post(
 
 router.post(
   '/forgot-password/reset',
+  otpLimiter,
   validate({ body: resetPasswordWithOtpSchema }),
   audit('FORGOT_PASSWORD_RESET', 'auth'),
   async (req, res) => {

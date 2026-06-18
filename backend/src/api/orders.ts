@@ -8,6 +8,7 @@ import { audit, validate } from '../security/http';
 import { secureLogger } from '../security/logger';
 import { razorpay, razorpayKeyId, verifyRazorpayPaymentSignature } from '../payments/razorpay';
 import { sendPushToUser } from '../services/pushNotifications';
+import { paymentLimiter } from '../security/rateLimit';
 
 const router = Router();
 
@@ -98,7 +99,7 @@ router.get('/:id', validate({ params: idParamsSchema }), audit('ORDER_READ', 'or
   });
 });
 
-router.post('/payment-intent', validate({ body: paymentIntentSchema }), audit('ORDER_PAYMENT_INTENT', 'order'), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/payment-intent', paymentLimiter, validate({ body: paymentIntentSchema }), audit('ORDER_PAYMENT_INTENT', 'order'), async (req: AuthenticatedRequest, res: Response) => {
   const { cafe_id, order_type } = req.body as z.infer<typeof paymentIntentSchema>;
   const cafe = await prisma.cafe.findUnique({
     where: { id: cafe_id },
@@ -186,7 +187,7 @@ function assertPayment(input: z.infer<typeof createOrderSchema>): string | null 
 }
 
 // POST /orders
-router.post('/', validate({ body: createOrderSchema }), audit('ORDER_CREATE', 'order'), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/', paymentLimiter, validate({ body: createOrderSchema }), audit('ORDER_CREATE', 'order'), async (req: AuthenticatedRequest, res: Response) => {
   const input = req.body as z.infer<typeof createOrderSchema>;
   const paymentError = assertPayment(input);
   if (paymentError) return res.status(400).json({ success: false, message: paymentError });

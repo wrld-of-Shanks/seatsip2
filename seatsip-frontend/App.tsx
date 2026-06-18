@@ -4,6 +4,7 @@ import { DarkTheme, DefaultTheme, NavigationContainer } from '@react-navigation/
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { CartProvider } from './src/context/CartContext';
@@ -253,13 +254,13 @@ export default function App() {
             <UnreadNotificationsProvider>
               <CartProvider>
                 <RootErrorBoundary>
-                  <View style={{ flex: 1 }}>
+                  <GestureHandlerRootView style={{ flex: 1 }}>
                     <OfflineBanner />
                     <ThemedNavigationShell>
                       <Navigation />
                       <StatusBar style="auto" />
                     </ThemedNavigationShell>
-                  </View>
+                  </GestureHandlerRootView>
                 </RootErrorBoundary>
               </CartProvider>
             </UnreadNotificationsProvider>

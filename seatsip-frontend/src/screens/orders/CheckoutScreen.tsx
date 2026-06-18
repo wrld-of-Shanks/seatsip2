@@ -134,7 +134,7 @@ export default function CheckoutScreen() {
   const cafeId = cartItems[0]?.cafe_id || '';
   const deliveryFee = orderType === 'DELIVERY' ? 40 : 0;
   const finalTotal = (cart?.total || 0) + deliveryFee;
-  const walletBalance = user?.wallet_balance || 0;
+  const walletBalance = Number(user?.wallet_balance) || 0;
 
   const paymentReady =
     paymentMethod === 'WALLET'
@@ -250,13 +250,15 @@ export default function CheckoutScreen() {
                   { method: 'card' },
                   { method: 'netbanking' },
                   { method: 'wallet' },
-                  { method: 'paylater' }
+                  { method: 'paylater' },
+                  { method: 'emi' }
                 ] : []),
                 ...(paymentMethod === 'CARD' ? [
                   { method: 'upi' },
                   { method: 'netbanking' },
                   { method: 'wallet' },
-                  { method: 'paylater' }
+                  { method: 'paylater' },
+                  { method: 'emi' }
                 ] : []),
               ],
               preferences: {
@@ -285,22 +287,73 @@ export default function CheckoutScreen() {
       });
     }
 
-    const checkout = await RazorpayCheckout.open({
-      key: orderData.keyId,
-      amount: orderData.amount,
-      currency: orderData.currency,
-      name: merchantName,
-      description: `SeatSip order at ${cartItems[0]?.cafe_name || 'cafe'}`,
-      order_id: orderData.orderId,
-      prefill: { name: user?.name, email: user?.email, contact: formattedContact },
-      method: { upi: paymentMethod === 'UPI', card: paymentMethod === 'CARD', netbanking: false, wallet: false },
-      theme: { color: Colors.accent },
-    });
-    return {
-      razorpay_order_id: checkout.razorpay_order_id,
-      razorpay_payment_id: checkout.razorpay_payment_id,
-      razorpay_signature: checkout.razorpay_signature,
-    };
+    try {
+      const checkout = await RazorpayCheckout.open({
+        key: orderData.keyId,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        name: merchantName,
+        description: `SeatSip order at ${cartItems[0]?.cafe_name || 'cafe'}`,
+        order_id: orderData.orderId,
+        prefill: { name: user?.name, email: user?.email, contact: formattedContact },
+        theme: { color: Colors.accent },
+        config: {
+          display: {
+            hide: [
+              ...(paymentMethod === 'UPI' ? [
+                { method: 'card' },
+                { method: 'netbanking' },
+                { method: 'wallet' },
+                { method: 'paylater' },
+                { method: 'emi' }
+              ] : []),
+              ...(paymentMethod === 'CARD' ? [
+                { method: 'upi' },
+                { method: 'netbanking' },
+                { method: 'wallet' },
+                { method: 'paylater' },
+                { method: 'emi' }
+              ] : []),
+            ],
+            preferences: {
+              show_default_blocks: true
+            }
+          }
+        },
+      });
+      return {
+        razorpay_order_id: checkout.razorpay_order_id,
+        razorpay_payment_id: checkout.razorpay_payment_id,
+        razorpay_signature: checkout.razorpay_signature,
+      };
+    } catch (err: any) {
+      if (__DEV__ && Platform.OS !== 'web') {
+        return new Promise<RazorpayAuthPayload>((resolve, reject) => {
+          Alert.alert(
+            'Dev Mode (Expo Go)',
+            'Razorpay native module is not linked in Expo Go. Simulate a successful payment?',
+            [
+              {
+                text: 'Simulate',
+                onPress: () => {
+                  resolve({
+                    razorpay_order_id: orderData.orderId,
+                    razorpay_payment_id: `dev_pay_${Date.now()}`,
+                    razorpay_signature: 'dev_bypass',
+                  });
+                },
+              },
+              {
+                text: 'Cancel',
+                style: 'cancel',
+                onPress: () => reject(new Error('Payment cancelled or simulated payment rejected')),
+              },
+            ]
+          );
+        });
+      }
+      throw err;
+    }
   }, [cafeId, cartItems, merchantName, orderType, paymentMethod, user?.email, user?.name, user?.phone]);
 
 
