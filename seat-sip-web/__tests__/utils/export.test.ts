@@ -8,8 +8,9 @@ describe('Export Utilities', () => {
 
   beforeEach(() => {
     document.body.innerHTML = ''
+    const originalCreateElement = document.createElement.bind(document)
     jest.spyOn(document, 'createElement').mockImplementation((tagName) => {
-      const element = document.createElement(tagName)
+      const element = originalCreateElement(tagName)
       if (tagName === 'a') {
         Object.defineProperty(element, 'href', { value: '', writable: true })
         Object.defineProperty(element, 'download', { value: '', writable: true })
