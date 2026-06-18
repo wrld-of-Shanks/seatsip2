@@ -96,6 +96,7 @@ model Cafe {
   is_active         Int            @default(1)
   priority          Int            @default(0)
   upi_id            String?
+  razorpay_account_id String?
   state             String?
   pincode           String?
   timezone          String         @default("Asia/Kolkata")
@@ -192,6 +193,8 @@ model Order {
   delivery_fee         Float     @default(0)
   discount             Float     @default(0)
   total                Float     @default(0)
+  commission           Float     @default(0)
+  owner_amount         Float     @default(0)
   payment_status       String?   @default("PENDING")
   payment_method       String?
   razorpay_order_id    String?

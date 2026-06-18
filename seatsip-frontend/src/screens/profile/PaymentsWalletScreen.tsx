@@ -22,6 +22,39 @@ import AppIcon from '../../components/ui/AppIcon';
 import { useAuth } from '../../context/AuthContext';
 import { usersApi } from '../../services/api';
 
+const loadRazorpayScript = (): Promise<boolean> => {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined') {
+      resolve(false);
+      return;
+    }
+    if ((window as any).Razorpay) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+};
+
+const cleanPhone = (phone?: string) => {
+  if (!phone) return '';
+  const digits = phone.replace(/\D/g, '');
+  if (digits.startsWith('91') && digits.length === 12) {
+    return '+' + digits;
+  }
+  if (digits.length === 10) {
+    return '+91' + digits;
+  }
+  return phone;
+};
+
+
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const BROWN = '#2C1A0E';
 const ACCENT = '#8B5E3C';
@@ -233,48 +266,84 @@ export default function PaymentsWalletScreen() {
         }
 
         let checkout: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string } | null = null;
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const RazorpayCheckout = require('react-native-razorpay').default;
-          checkout = await RazorpayCheckout.open({
-            key: d.keyId,
-            amount: d.amount,
-            currency: d.currency || 'INR',
-            name: 'SeatSip',
-            description: 'Wallet top-up',
-            order_id: d.orderId,
-            prefill: { name: user?.name, email: user?.email, contact: user?.phone },
-            theme: { color: ACCENT },
-          });
-        } catch (razorErr: any) {
-          if (razorErr?.code === 2 || /cancel/i.test(String(razorErr?.description || ''))) return;
-          if (__DEV__) {
-            Alert.alert(
-              'Dev Mode',
-              'Razorpay native module is not linked (Expo Go). Simulate a successful payment?',
-              [
-                {
-                  text: 'Simulate',
-                  onPress: async () => {
-                    try {
-                      await usersApi.verifyWalletTopup({
-                        razorpay_order_id: d.orderId!,
-                        razorpay_payment_id: `dev_pay_${Date.now()}`,
-                        razorpay_signature: 'dev_bypass',
-                      });
-                    } catch { /* signature check will fail in dev */ }
-                    await refreshUser();
-                    await loadTransactions();
-                    setSheetVisible(false);
-                  },
-                },
-                { text: 'Cancel', style: 'cancel' },
-              ],
-            );
-          } else {
-            Alert.alert('Payment unavailable', 'Please update the app to enable payments.');
+        if (Platform.OS === 'web') {
+          const loaded = await loadRazorpayScript();
+          if (!loaded) {
+            throw new Error('Failed to load Razorpay SDK. Please check your internet connection.');
           }
-          return;
+          checkout = await new Promise((resolve, reject) => {
+            const options = {
+              key: d.keyId,
+              amount: d.amount,
+              currency: d.currency || 'INR',
+              name: 'SeatSip',
+              description: 'Wallet top-up',
+              order_id: d.orderId,
+              prefill: { name: user?.name, email: user?.email, contact: cleanPhone(user?.phone) },
+              theme: { color: ACCENT },
+              handler: (response: any) => {
+                resolve({
+                  razorpay_order_id: response.razorpay_order_id,
+                  razorpay_payment_id: response.razorpay_payment_id,
+                  razorpay_signature: response.razorpay_signature,
+                });
+              },
+              modal: {
+                ondismiss: () => {
+                  reject(new Error('Payment cancelled by user'));
+                },
+              },
+            };
+            const rzp = new (window as any).Razorpay(options);
+            rzp.on('payment.failed', (response: any) => {
+              reject(new Error(response.error.description || 'Payment failed'));
+            });
+            rzp.open();
+          });
+        } else {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const RazorpayCheckout = require('react-native-razorpay').default;
+            checkout = await RazorpayCheckout.open({
+              key: d.keyId,
+              amount: d.amount,
+              currency: d.currency || 'INR',
+              name: 'SeatSip',
+              description: 'Wallet top-up',
+              order_id: d.orderId,
+              prefill: { name: user?.name, email: user?.email, contact: cleanPhone(user?.phone) },
+              theme: { color: ACCENT },
+            });
+          } catch (razorErr: any) {
+            if (razorErr?.code === 2 || /cancel/i.test(String(razorErr?.description || ''))) return;
+            if (__DEV__) {
+              Alert.alert(
+                'Dev Mode',
+                'Razorpay native module is not linked (Expo Go). Simulate a successful payment?',
+                [
+                  {
+                    text: 'Simulate',
+                    onPress: async () => {
+                      try {
+                        await usersApi.verifyWalletTopup({
+                          razorpay_order_id: d.orderId!,
+                          razorpay_payment_id: `dev_pay_${Date.now()}`,
+                          razorpay_signature: 'dev_bypass',
+                        });
+                      } catch { /* signature check will fail in dev */ }
+                      await refreshUser();
+                      await loadTransactions();
+                      setSheetVisible(false);
+                    },
+                  },
+                  { text: 'Cancel', style: 'cancel' },
+                ],
+              );
+            } else {
+              Alert.alert('Payment unavailable', 'Please update the app to enable payments.');
+            }
+            return;
+          }
         }
 
         if (!checkout) return;

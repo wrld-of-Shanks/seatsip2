@@ -18,6 +18,10 @@ export async function requireBiometric(reason: string): Promise<boolean> {
   if (Platform.OS === 'web') {
     void reason;
     if (typeof window === 'undefined') return false;
+    // Bypass passkey requirement for local testing/development
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return true;
+    }
     if (!('PublicKeyCredential' in window)) return false;
     try {
       const challenge = new Uint8Array(32);

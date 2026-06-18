@@ -242,10 +242,11 @@ usersRouter.post('/wallet/topup', (_req: Request, res: Response) => {
 
 usersRouter.post('/wallet/topup/order', validate({ body: walletTopupOrderSchema }), audit('WALLET_TOPUP_ORDER', 'wallet'), async (req: AuthenticatedRequest, res: Response) => {
   const { amount } = req.body as z.infer<typeof walletTopupOrderSchema>;
+  const receiptId = `wal_${req.user.userId.slice(-12)}_${Date.now()}`;
   const order = await razorpay.orders.create({
     amount: Math.round(amount * 100),
     currency: 'INR',
-    receipt: `wallet_${req.user.userId}_${Date.now()}`,
+    receipt: receiptId,
     notes: { purpose: 'wallet_topup', userId: req.user.userId },
   });
 

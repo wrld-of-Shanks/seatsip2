@@ -209,6 +209,7 @@ model Cafe {
   delivery_fee     Float    @default(0)
   min_order        Float    @default(0)
   upi_id           String?
+  razorpay_account_id String?
   gstin            String?
 
   // Capacity
@@ -395,6 +396,8 @@ model Order {
   discount             Float       @default(0)
   loyalty_discount     Float       @default(0)
   total                Float       @default(0)
+  commission           Float       @default(0)
+  owner_amount         Float       @default(0)
 
   // Payment
   payment_status       String      @default("PENDING")
