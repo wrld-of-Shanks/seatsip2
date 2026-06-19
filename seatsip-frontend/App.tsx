@@ -174,16 +174,16 @@ function Navigation() {
 
   React.useEffect(() => {
     if (!isLoading) {
-      // Keep loading screen for at least 1.5s for a premium feel
+      // Keep loading screen for at least 2.8s for a premium feel and animation completion
       const timer = setTimeout(() => {
         setMinLoading(false);
-      }, 1800);
+      }, 2800);
       return () => clearTimeout(timer);
     }
   }, [isLoading]);
 
-  if (isLoading) {
-    return null;
+  if (isLoading || minLoading) {
+    return <LoadingScreen />;
   }
 
   return (
