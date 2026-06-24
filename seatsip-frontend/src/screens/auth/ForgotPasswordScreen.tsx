@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import {
   Dimensions,
   ActivityIndicator,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { BlurView } from 'expo-blur';
 import { Mail, Lock, Eye, EyeOff, KeyRound, ChevronLeft, ShieldCheck } from 'lucide-react-native';
@@ -37,10 +37,38 @@ export default function ForgotPasswordScreen() {
   const [otp, setOtp] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordWarning, setPasswordWarning] = useState('');
   
   const [loading, setLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
   const [showConfirmPass, setShowConfirmPass] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      setStep('request');
+      setEmail('');
+      setOtp('');
+      setPassword('');
+      setConfirmPassword('');
+      setPasswordWarning('');
+      setShowPass(false);
+      setShowConfirmPass(false);
+    }, [])
+  );
+
+  useEffect(() => {
+    if (!password) {
+      setPasswordWarning('');
+    } else if (password.length < 10) {
+      setPasswordWarning('Password must be at least 10 characters');
+    } else if (/^password\d{0,5}$/i.test(password) || /^123456/i.test(password)) {
+      setPasswordWarning('This is similar to a commonly used password');
+    } else if (!/[A-Z]/.test(password) && !/[^a-zA-Z0-9]/.test(password)) {
+      setPasswordWarning('Use a mix of letters, numbers & symbols');
+    } else {
+      setPasswordWarning('');
+    }
+  }, [password]);
 
   // Field focus states
   const [emailFocused, setEmailFocused] = useState(false);
@@ -278,6 +306,16 @@ export default function ForgotPasswordScreen() {
                         </TouchableOpacity>
                       </View>
 
+                      {passwordWarning ? (
+                        <Text style={[styles.passwordHint, styles.passwordHintWarning]}>
+                          {passwordWarning}
+                        </Text>
+                      ) : (
+                        <Text style={styles.passwordHint}>
+                          Min 10 characters · Use a mix of letters, numbers &amp; symbols · Avoid common passwords
+                        </Text>
+                      )}
+
                       {/* Confirm Password Field */}
                       <View style={[styles.inputContainer, confirmPasswordFocused && styles.inputContainerFocused]}>
                         <View style={styles.iconBox}>
@@ -464,6 +502,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     fontFamily: 'Inter-Bold',
+  },
+  passwordHint: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.45)',
+    textAlign: 'left',
+    marginBottom: 20,
+    marginTop: -14,
+    lineHeight: 16,
+    fontFamily: 'Inter-Regular',
+  },
+  passwordHintWarning: {
+    color: '#FF6B00',
+    fontWeight: '600',
   },
   backToLoginBtn: {
     alignItems: 'center',

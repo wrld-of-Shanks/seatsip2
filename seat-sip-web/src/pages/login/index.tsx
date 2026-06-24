@@ -59,6 +59,12 @@ export default function LoginPage() {
         return;
       }
 
+      if (user.role === 'ADMIN') {
+        persistAuthSession(token, user);
+        router.push('/admin/dashboard');
+        return;
+      }
+
       const status = user.status || user.verification_status || 'PENDING_APPROVAL';
 
       if (status === 'PENDING_APPROVAL' || status === 'PENDING') {
@@ -73,9 +79,7 @@ export default function LoginPage() {
 
       persistAuthSession(token, user);
 
-      if (user.role === 'ADMIN') {
-        router.push('/admin/dashboard');
-      } else if (user.role === 'CAFE_OWNER' && status === 'APPROVED') {
+      if (user.role === 'CAFE_OWNER' && status === 'APPROVED') {
         router.push('/owner/dashboard');
       } else {
         setError('Your account is not approved for access yet.');
