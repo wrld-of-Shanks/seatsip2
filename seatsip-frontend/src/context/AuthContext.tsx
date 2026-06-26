@@ -89,8 +89,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           await AsyncStorage.setItem('user', JSON.stringify(data.data));
           void registerForPushNotificationsAsync();
         } catch (error: any) {
-          if (error?.response?.status === 401) {
-            safeLog.error('Token expired or invalid during auth check, clearing auth state');
+          if (error?.response?.status === 401 || error?.response?.status === 404) {
+            safeLog.error('Token expired or invalid during auth check (401/404), clearing auth state');
             await clearTokens();
             setUser(null);
             setAccessToken(null);
@@ -164,7 +164,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await AsyncStorage.setItem('user', JSON.stringify(data.data));
     } catch (error: any) {
       safeLog.error('refreshUser failed', error);
-      if (error?.response?.status === 401) {
+      if (error?.response?.status === 401 || error?.response?.status === 404) {
         await logout();
       }
     }

@@ -189,7 +189,10 @@ export default function BookingConfirmedScreen() {
       <StatusBar barStyle="dark-content" backgroundColor="#F0EBE3" />
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          Platform.OS === 'android' && { paddingTop: (StatusBar.currentHeight || 24) + 16 }
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* Main card */}
@@ -267,8 +270,13 @@ export default function BookingConfirmedScreen() {
               <View style={styles.detailCell}>
                 <Text style={styles.detailLabel}>VENUE</Text>
                 <View style={styles.venueRow}>
-                  <Text style={styles.venueName} numberOfLines={2}>{cafeName}</Text>
-                  <Text style={styles.venueAddress}>Koramangala, Bengaluru</Text>
+                  <View style={styles.venueImagePlaceholder}>
+                    <AppIcon name="food" size={20} color="#8B5E3C" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.venueName} numberOfLines={2}>{cafeName}</Text>
+                    <Text style={styles.venueAddress} numberOfLines={1}>Koramangala, Bengaluru</Text>
+                  </View>
                 </View>
               </View>
               <View style={[styles.detailCell, styles.detailCellRight]}>
@@ -376,6 +384,10 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#FAFAF7',
     borderRadius: 24,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
     paddingTop: 36,
     paddingBottom: 28,
     paddingHorizontal: 0,

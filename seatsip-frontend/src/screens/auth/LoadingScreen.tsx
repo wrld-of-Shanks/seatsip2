@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -9,10 +9,80 @@ import {
   Image,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { useEventListener } from 'expo';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { useAuth } from '../../context/AuthContext';
 
-const { width, height } = Dimensions.get('window');
+const firstVideo = require('../../../media/first_gwr_video_mvp.mp4');
 
-export default function LoadingScreen() {
+interface LoadingScreenProps {
+  onFinish?: () => void;
+}
+
+function VideoPlayerComponent({
+  onFinish,
+  onError,
+}: {
+  onFinish: () => void;
+  onError: () => void;
+}) {
+  const { isLoading } = useAuth();
+  const videoCompletedRef = useRef(false);
+  const [videoCompleted, setVideoCompleted] = useState(false);
+
+  const player = useVideoPlayer(firstVideo, (playerInstance) => {
+    playerInstance.loop = false;
+    playerInstance.play();
+  });
+
+  // Watch for player errors
+  useEffect(() => {
+    const subscription = player.addListener('statusChange', (event) => {
+      const status = typeof event === 'object' && event ? event.status : event;
+      if (status === 'error') {
+        console.warn('Video playback error, falling back to animated loader:', event);
+        onError();
+      }
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [player, onError]);
+
+  // Handle video ending
+  useEventListener(player, 'playToEnd', () => {
+    videoCompletedRef.current = true;
+    setVideoCompleted(true);
+    
+    if (!isLoading) {
+      onFinish();
+    } else {
+      // Loop the video if the app is still loading
+      player.loop = true;
+      player.play();
+    }
+  });
+
+  // Watch auth loading status: if loading finishes and video has finished at least once, transition out
+  useEffect(() => {
+    if (!isLoading && videoCompletedRef.current) {
+      onFinish();
+    }
+  }, [isLoading, onFinish]);
+
+  return (
+    <VideoView
+      style={StyleSheet.absoluteFill}
+      player={player}
+      contentFit="cover"
+      surfaceType="textureView"
+      allowsFullscreen={false}
+      nativeControls={false}
+    />
+  );
+}
+
+function AnimatedLoadingUI({ onFinish }: { onFinish?: () => void }) {
   const logoOpacity = useRef(new Animated.Value(0)).current;
   const logoScale = useRef(new Animated.Value(0.6)).current;
   const textOpacity = useRef(new Animated.Value(0)).current;
@@ -23,9 +93,7 @@ export default function LoadingScreen() {
   const screenOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    // Run the animation sequence
     Animated.parallel([
-      // 1. Logo Animation (fades in and scales up after 200ms delay)
       Animated.sequence([
         Animated.delay(200),
         Animated.parallel([
@@ -41,7 +109,6 @@ export default function LoadingScreen() {
           }),
         ]),
       ]),
-      // 2. Text Animation (slides up and fades in after 600ms delay)
       Animated.sequence([
         Animated.delay(600),
         Animated.parallel([
@@ -57,7 +124,6 @@ export default function LoadingScreen() {
           }),
         ]),
       ]),
-      // 3. Subtitle Animation (fades in after 900ms delay)
       Animated.sequence([
         Animated.delay(900),
         Animated.timing(subtitleOpacity, {
@@ -66,7 +132,6 @@ export default function LoadingScreen() {
           useNativeDriver: true,
         }),
       ]),
-      // 4. Progress bar & loader fade in, and fill bar over 1.2s (after 1100ms delay)
       Animated.sequence([
         Animated.delay(1100),
         Animated.parallel([
@@ -78,11 +143,10 @@ export default function LoadingScreen() {
           Animated.timing(progressVal, {
             toValue: 1,
             duration: 1200,
-            useNativeDriver: false, // layout property (width) doesn't support native driver
+            useNativeDriver: false,
           }),
         ]),
       ]),
-      // 5. Final screen cross-fade to home screen (at 2400ms)
       Animated.sequence([
         Animated.delay(2400),
         Animated.timing(screenOpacity, {
@@ -91,8 +155,12 @@ export default function LoadingScreen() {
           useNativeDriver: true,
         }),
       ]),
-    ]).start();
-  }, []);
+    ]).start(() => {
+      if (onFinish) {
+        onFinish();
+      }
+    });
+  }, [logoOpacity, logoScale, textOpacity, textTranslateY, subtitleOpacity, progressOpacity, progressVal, screenOpacity, onFinish]);
 
   const barWidth = progressVal.interpolate({
     inputRange: [0, 1],
@@ -104,7 +172,6 @@ export default function LoadingScreen() {
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
       <View style={styles.overlay}>
         <View style={styles.content}>
-          {/* Animated Logo Image */}
           <Animated.View
             style={[
               styles.logoContainer,
@@ -121,7 +188,6 @@ export default function LoadingScreen() {
             />
           </Animated.View>
 
-          {/* Animated Branding Text */}
           <Animated.View
             style={[
               styles.branding,
@@ -139,7 +205,6 @@ export default function LoadingScreen() {
             </Animated.Text>
           </Animated.View>
 
-          {/* Animated Loading Progress Bar */}
           <Animated.View style={[styles.loaderWrapper, { opacity: progressOpacity }]}>
             <BlurView intensity={20} tint="light" style={styles.loaderTrack}>
               <Animated.View style={[styles.loaderBar, { width: barWidth }]} />
@@ -150,6 +215,40 @@ export default function LoadingScreen() {
       </View>
     </Animated.View>
   );
+}
+
+export default function LoadingScreen({ onFinish }: LoadingScreenProps) {
+  // Temporarily bypass the video player and render the animated fallback UI for now.
+  // To restore the video player after approval, uncomment the block below and remove this return statement.
+  return <AnimatedLoadingUI onFinish={onFinish} />;
+
+  /*
+  const [videoError, setVideoError] = useState(false);
+
+  // Fallback safety timeout: if anything hangs, transition in 15 seconds
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (onFinish) {
+        onFinish();
+      }
+    }, 15000);
+    return () => clearTimeout(timer);
+  }, [onFinish]);
+
+  if (videoError) {
+    return <AnimatedLoadingUI onFinish={onFinish} />;
+  }
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
+      <VideoPlayerComponent
+        onFinish={onFinish || (() => {})}
+        onError={() => setVideoError(true)}
+      />
+    </View>
+  );
+  */
 }
 
 const styles = StyleSheet.create({
