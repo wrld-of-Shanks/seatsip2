@@ -106,11 +106,12 @@ export function DataTable<TData, TValue>({
               {table.getHeaderGroups().map((headerGroup) => (
                 <tr key={headerGroup.id}>
                   {selectable && (
-                    <th className="w-12 p-4 text-left">
+                    <th className="w-12 p-4 text-left" aria-label="Select all rows">
                       <input
                         type="checkbox"
                         checked={table.getIsAllRowsSelected()}
                         onChange={table.getToggleAllRowsSelectedHandler()}
+                        aria-label="Select all rows"
                         className="rounded border-stone-300 text-amber-600 focus:ring-amber-500"
                       />
                     </th>
@@ -157,6 +158,7 @@ export function DataTable<TData, TValue>({
                           type="checkbox"
                           checked={row.getIsSelected()}
                           onChange={row.getToggleSelectedHandler()}
+                          aria-label={`Select row ${row.id}`}
                           className="rounded border-stone-300 text-amber-600 focus:ring-amber-500"
                         />
                       </td>
@@ -186,6 +188,7 @@ export function DataTable<TData, TValue>({
                 setPageSize(Number(e.target.value));
                 table.setPageSize(Number(e.target.value));
               }}
+              aria-label="Rows per page"
               className="border border-stone-300 rounded-md px-2 py-1 text-sm"
             >
               <option value={25}>25</option>
@@ -201,6 +204,7 @@ export function DataTable<TData, TValue>({
               <button
                 onClick={() => table.setPageIndex(0)}
                 disabled={!table.getCanPreviousPage()}
+                aria-label="First page"
                 className="p-2 rounded border border-stone-200 hover:bg-stone-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronsLeft size={16} />
@@ -208,6 +212,7 @@ export function DataTable<TData, TValue>({
               <button
                 onClick={() => table.previousPage()}
                 disabled={!table.getCanPreviousPage()}
+                aria-label="Previous page"
                 className="p-2 rounded border border-stone-200 hover:bg-stone-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronLeft size={16} />
@@ -215,6 +220,7 @@ export function DataTable<TData, TValue>({
               <button
                 onClick={() => table.nextPage()}
                 disabled={!table.getCanNextPage()}
+                aria-label="Next page"
                 className="p-2 rounded border border-stone-200 hover:bg-stone-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronRight size={16} />
@@ -222,6 +228,7 @@ export function DataTable<TData, TValue>({
               <button
                 onClick={() => table.setPageIndex(table.getPageCount() - 1)}
                 disabled={!table.getCanNextPage()}
+                aria-label="Last page"
                 className="p-2 rounded border border-stone-200 hover:bg-stone-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronsRight size={16} />

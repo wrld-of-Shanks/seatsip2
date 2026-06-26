@@ -56,6 +56,8 @@ export function isGoogleClientConfigured(): boolean {
 
 /** Satisfies Expo invariant on web when no real id is set (button stays disabled). */
 const MISSING_WEB_CLIENT_PLACEHOLDER = '000000000000-missing.apps.googleusercontent.com';
+const MISSING_ANDROID_CLIENT_PLACEHOLDER = '000000000000-missing-android.apps.googleusercontent.com';
+const MISSING_IOS_CLIENT_PLACEHOLDER = '000000000000-missing-ios.apps.googleusercontent.com';
 
 function extractIdToken(result: AuthSessionResult): string | null {
   if (result.type !== 'success') return null;
@@ -74,8 +76,11 @@ function extractIdToken(result: AuthSessionResult): string | null {
 /** Call from a React component only (uses hooks). */
 export function useGoogleIdTokenAuth() {
   const { webId, androidId, iosId, webClientId: resolved } = resolveGoogleClientIds();
-  // expo-auth-session: `webClientId` must be a non-empty string on web (never undefined).
+  
+  // expo-auth-session requirements to prevent crashing on missing client IDs:
   const webClientIdForExpo = resolved || MISSING_WEB_CLIENT_PLACEHOLDER;
+  const androidClientIdForExpo = androidId || (Platform.OS === 'android' ? MISSING_ANDROID_CLIENT_PLACEHOLDER : undefined);
+  const iosClientIdForExpo = iosId || (Platform.OS === 'ios' ? MISSING_IOS_CLIENT_PLACEHOLDER : undefined);
 
   // Google Error 400 redirect_uri_mismatch: redirect_uri must exactly match an entry under the
   // *Web* OAuth client's "Authorized redirect URIs" (and origin under "Authorized JavaScript origins").
@@ -89,8 +94,8 @@ export function useGoogleIdTokenAuth() {
 
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
     webClientId: webClientIdForExpo,
-    iosClientId: iosId || webId || androidId || undefined,
-    androidClientId: androidId || undefined,
+    iosClientId: iosClientIdForExpo || webId || androidId || undefined,
+    androidClientId: androidClientIdForExpo,
     ...(oauthRedirectUri ? { redirectUri: oauthRedirectUri } : {}),
   });
 

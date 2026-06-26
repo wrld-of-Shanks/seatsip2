@@ -7,6 +7,7 @@ import { AuthenticatedRequest } from '../types/authenticated-request';
 import { validate } from '../security/http';
 import { secureLogger } from '../security/logger';
 import { razorpay, verifyRazorpayPaymentSignature } from '../payments/razorpay';
+import { paymentLimiter } from '../security/rateLimit';
 
 const subscriptionsRouter = Router();
 subscriptionsRouter.use(authenticate);
@@ -85,7 +86,7 @@ const createOrderSchema = z.object({
   planType: z.enum(['MONTHLY', 'YEARLY']).optional().default('MONTHLY'),
 });
 
-subscriptionsRouter.post('/create-order', validate({ body: createOrderSchema }), async (req: AuthenticatedRequest, res: Response) => {
+subscriptionsRouter.post('/create-order', paymentLimiter, validate({ body: createOrderSchema }), async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.userId;
   if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
 
@@ -122,7 +123,7 @@ const activateSchema = z.object({
   razorpay_signature: z.string().optional(),
 });
 
-subscriptionsRouter.post('/activate', validate({ body: activateSchema }), async (req: AuthenticatedRequest, res: Response) => {
+subscriptionsRouter.post('/activate', paymentLimiter, validate({ body: activateSchema }), async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.userId;
   if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
 

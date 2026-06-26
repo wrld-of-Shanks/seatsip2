@@ -8,6 +8,7 @@ import { audit, validate } from '../security/http';
 import { secureLogger } from '../security/logger';
 import { razorpay, razorpayKeyId, verifyRazorpayPaymentSignature } from '../payments/razorpay';
 import { sendPushToUser } from '../services/pushNotifications';
+import { paymentLimiter } from '../security/rateLimit';
 
 const router = Router();
 
@@ -98,9 +99,12 @@ router.get('/:id', validate({ params: idParamsSchema }), audit('ORDER_READ', 'or
   });
 });
 
-router.post('/payment-intent', validate({ body: paymentIntentSchema }), audit('ORDER_PAYMENT_INTENT', 'order'), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/payment-intent', paymentLimiter, validate({ body: paymentIntentSchema }), audit('ORDER_PAYMENT_INTENT', 'order'), async (req: AuthenticatedRequest, res: Response) => {
   const { cafe_id, order_type } = req.body as z.infer<typeof paymentIntentSchema>;
-  const cafe = await prisma.cafe.findUnique({ where: { id: cafe_id }, select: { id: true, delivery_fee: true } });
+  const cafe = await prisma.cafe.findUnique({
+    where: { id: cafe_id },
+    select: { id: true, delivery_fee: true, razorpay_account_id: true }
+  });
   if (!cafe) return res.status(404).json({ success: false, message: 'Cafe not found' });
 
   const cart = await prisma.cartItem.findMany({
@@ -119,12 +123,44 @@ router.post('/payment-intent', validate({ body: paymentIntentSchema }), audit('O
   const tax = subtotal * 0.05;
   const deliveryFee = order_type === 'DELIVERY' ? cafe.delivery_fee : 0;
   const total = subtotal + tax + deliveryFee;
-  const order = await razorpay.orders.create({
-    amount: Math.round(total * 100),
-    currency: 'INR',
-    receipt: `order_${req.user.userId}_${Date.now()}`,
-    notes: { purpose: 'order_payment', userId: req.user.userId, cafeId: cafe_id },
-  });
+
+  const commission = Number((total * 0.05).toFixed(2));
+  const ownerShare = Number((total - commission).toFixed(2));
+
+  const transfers = cafe.razorpay_account_id ? [
+    {
+      account: cafe.razorpay_account_id,
+      amount: Math.round(ownerShare * 100), // in paise
+      currency: 'INR',
+      notes: { cafeId: cafe_id },
+      on_hold: false
+    }
+  ] : undefined;
+
+  let order;
+  const receiptId = `ord_${req.user.userId.slice(-12)}_${Date.now()}`;
+  try {
+    order = await razorpay.orders.create({
+      amount: Math.round(total * 100),
+      currency: 'INR',
+      receipt: receiptId,
+      notes: { purpose: 'order_payment', userId: req.user.userId, cafeId: cafe_id },
+      ...(transfers ? { transfers } : {})
+    });
+  } catch (err: any) {
+    console.error('FULL RAZORPAY ERROR DETAILS:', err);
+    if (transfers) {
+      secureLogger.warn(`Razorpay Route transfer failed: ${err.message || JSON.stringify(err)}. Retrying without transfers parameter.`);
+      order = await razorpay.orders.create({
+        amount: Math.round(total * 100),
+        currency: 'INR',
+        receipt: receiptId,
+        notes: { purpose: 'order_payment', userId: req.user.userId, cafeId: cafe_id },
+      });
+    } else {
+      throw err;
+    }
+  }
 
   secureLogger.info(`[Orders] Payment intent created for user ${req.user.userId}, cafe ${cafe_id}: order ${order.id}`);
   return res.status(201).json({ success: true, data: { orderId: order.id, amount: order.amount, currency: order.currency, keyId: razorpayKeyId() } });
@@ -151,7 +187,7 @@ function assertPayment(input: z.infer<typeof createOrderSchema>): string | null 
 }
 
 // POST /orders
-router.post('/', validate({ body: createOrderSchema }), audit('ORDER_CREATE', 'order'), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/', paymentLimiter, validate({ body: createOrderSchema }), audit('ORDER_CREATE', 'order'), async (req: AuthenticatedRequest, res: Response) => {
   const input = req.body as z.infer<typeof createOrderSchema>;
   const paymentError = assertPayment(input);
   if (paymentError) return res.status(400).json({ success: false, message: paymentError });
@@ -186,6 +222,8 @@ router.post('/', validate({ body: createOrderSchema }), audit('ORDER_CREATE', 'o
       const tax = subtotal * 0.05;
       const delivery_fee = input.order_type === 'DELIVERY' ? cafe.delivery_fee : 0;
       const total = subtotal + tax + delivery_fee;
+      const commission = Number((total * 0.05).toFixed(2));
+      const owner_amount = Number((total - commission).toFixed(2));
       const orderId = uuidv4();
 
       if (input.payment_method === 'WALLET') {
@@ -240,6 +278,8 @@ router.post('/', validate({ body: createOrderSchema }), audit('ORDER_CREATE', 'o
           tax,
           delivery_fee,
           total,
+          commission,
+          owner_amount,
           payment_status: 'PAID',
           payment_method: input.payment_method,
           razorpay_order_id: razorpayOrderId,

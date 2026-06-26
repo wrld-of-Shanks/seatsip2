@@ -1,5 +1,4 @@
 /** Runs before any test file (Jest setupFiles). */
-const { execSync } = require('child_process');
 const path = require('path');
 
 process.env.NODE_ENV = 'test';
@@ -11,21 +10,18 @@ process.env.RAZORPAY_KEY_ID = 'rzp_test_jest';
 process.env.RAZORPAY_KEY_SECRET = 'jest-razorpay-secret';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'test-webhook-secret';
 
-/** SQLite URL for integration tests (override in CI). */
-if (!process.env.DATABASE_URL) {
-  process.env.DATABASE_URL = 'file:./test.db';
-}
+// Load environment variables from .env
+const dotenv = require('dotenv');
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
-// Run prisma db push to ensure test database schema is up-to-date
-try {
-  const prismaBin = path.resolve(__dirname, '../node_modules/.bin/prisma');
-  execSync(`"${prismaBin}" db push --accept-data-loss --skip-generate`, {
-    env: process.env,
-    stdio: 'pipe'
-  });
-} catch (error) {
-  console.error('Failed to sync Prisma test database schema:', error.message);
-  if (error.stdout) console.error('stdout:', error.stdout.toString());
-  if (error.stderr) console.error('stderr:', error.stderr.toString());
+/** PostgreSQL URL for integration tests (override in CI, dynamically sets dedicated test DB). */
+if (process.env.DATABASE_URL) {
+  if (process.env.DATABASE_URL.includes('/seatsip?')) {
+    process.env.DATABASE_URL = process.env.DATABASE_URL.replace('/seatsip?', '/seatsip_test?');
+  } else if (process.env.DATABASE_URL.endsWith('/seatsip')) {
+    process.env.DATABASE_URL = process.env.DATABASE_URL + '_test';
+  }
+} else {
+  process.env.DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/seatsip_test?schema=public';
 }
 

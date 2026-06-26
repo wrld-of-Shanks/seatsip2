@@ -10,7 +10,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1a1a2e"
+      "backgroundColor": "#1C1008"
     },
     "assetBundlePatterns": ["**/*"],
     "ios": {
@@ -27,7 +27,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1a1a2e"
+        "backgroundColor": "#E6DDD4"
       },
       "package": "com.seatsip.app",
       "intentFilters": [
@@ -74,6 +74,7 @@
       }
     },
     "plugins": [
+      "expo-video",
       "expo-font",
       "expo-location",
       [

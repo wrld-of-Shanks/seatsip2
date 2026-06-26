@@ -5,6 +5,7 @@ import {
   Animated,
   Dimensions,
   Image,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -179,7 +180,178 @@ export default function ProductDetailSheet({ visible, item, cafeId, onClose }: P
     }
   };
 
+  const renderContent = () => (
+    <>
+      <View style={styles.hero}>
+        {isBeverage ? (
+          <>
+            {item.image_url && (
+              <Image 
+                source={typeof item.image_url === 'string' ? { uri: item.image_url } : item.image_url} 
+                style={[StyleSheet.absoluteFill, { opacity: 0.18 }]} 
+                resizeMode="cover"
+              />
+            )}
+            <CupStack quantity={quantity} scale={selectedSize?.name === 'Large' ? 1 : selectedSize?.name === 'Small' ? 0.72 : 0.88} />
+          </>
+        ) : item.image_url ? (
+          <Image 
+            source={typeof item.image_url === 'string' ? { uri: item.image_url } : item.image_url} 
+            style={StyleSheet.absoluteFillObject} 
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={styles.foodPlaceholder}>
+            <Text style={styles.foodPlaceholderEmoji}>
+              {item.category?.toLowerCase().includes('dessert') ? '🍰' : '🍔'}
+            </Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.content}>
+        <View style={styles.topRow}>
+          <View style={styles.popularPill}>
+            <AppIcon name="popular" size={11} color={Colors.brand} fill={Colors.brand} />
+            <Text style={styles.popularText}>{item.is_popular ? 'Popular' : 'Recommended'}</Text>
+          </View>
+          <Text style={[styles.price, { fontSize: responsive(18, 20, 22) }]}>₹{totalPrice}</Text>
+        </View>
+
+        <Text style={[styles.name, { fontSize: responsive(20, 24, 28) }]}>{item.name}</Text>
+        <Text style={[styles.desc, { fontSize: responsive(11, 12, 13) }]}>
+          {item.description || 'Experience the perfect blend of tradition and craftsmanship. Smooth, bold, and endlessly satisfying.'}
+        </Text>
+
+        {isBeverage && (
+          <View style={styles.caffeinePill}>
+            <AppIcon name="zap" size={13} color={Colors.brand} />
+            <Text style={styles.caffeineText}>
+              <Text style={styles.caffeineStrong}>{totalCaffeine.toFixed(0)} mg</Text> caffeine
+            </Text>
+          </View>
+        )}
+
+        {isBeverage && (
+          <>
+            <View style={styles.divider} />
+            <Text style={styles.sectionLabel}>Size</Text>
+            <View style={styles.sizeRow}>
+              {item.sizes?.map((size: any) => {
+                const selected = selectedSize?.name === size.name;
+
+                return (
+                  <TouchableOpacity
+                    key={size.name}
+                    style={[styles.sizeCard, selected && styles.optionActive]}
+                    onPress={() => setSelectedSize(size)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[styles.sizeLabel, selected && styles.optionActiveText]}>{size.name}</Text>
+                    <Text style={[styles.sizeMeta, selected && styles.optionActiveSubtext]}>
+                      {size.volume} {size.unit}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </>
+        )}
+
+        <View style={styles.divider} />
+        <Text style={styles.sectionLabel}>Quantity</Text>
+        <View style={styles.qtyRow}>
+          <TouchableOpacity style={styles.qtyBtn} onPress={() => setQuantity((v) => Math.max(1, v - 1))}>
+            <Text style={styles.qtyText}>-</Text>
+          </TouchableOpacity>
+          <Text style={styles.qtyValue}>{quantity}</Text>
+          <TouchableOpacity style={styles.qtyBtn} onPress={() => setQuantity((v) => Math.min(9, v + 1))}>
+            <Text style={styles.qtyText}>+</Text>
+          </TouchableOpacity>
+        </View>
+
+        {isBeverage && (
+          <>
+            <View style={styles.divider} />
+            <Text style={styles.sectionLabel}>Milk Type</Text>
+            <View style={[styles.milkRow, width < 360 && styles.milkRowWrap]}>
+              {MILKS.map((milk) => {
+                const selected = selectedMilk === milk.id;
+
+                return (
+                  <TouchableOpacity
+                    key={milk.id}
+                    style={[
+                      styles.milkCard, 
+                      selected && styles.optionActive,
+                      width < 360 && styles.milkCardSmall
+                    ]}
+                    onPress={() => setSelectedMilk(milk.id)}
+                    activeOpacity={0.85}
+                  >
+                    <AppIcon name={milk.icon} size={19} color={selected ? Colors.white : Colors.secondary} />
+                    <Text style={[styles.milkLabel, selected && styles.optionActiveText]}>{milk.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </>
+        )}
+
+        <TouchableOpacity
+          style={[styles.cta, { marginTop: Spacing.lg }]}
+          activeOpacity={0.9}
+          disabled={adding}
+          onPress={handleAddToCart}
+        >
+          {adding ? (
+            <ActivityIndicator size="small" color={Colors.white} />
+          ) : (
+            <>
+              <AppIcon name="cart" size={18} color={Colors.white} />
+              <Text style={styles.ctaText}>
+                {width < 350 ? `Add — ₹${totalPrice}` : `Add to cart — ₹${totalPrice}`}
+              </Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
   const sheetWidth = isTablet ? (width - Spacing.md * 3) / 2 : width - Spacing.md * 2;
+
+  if (Platform.OS === 'web') {
+    if (!visible) return null;
+    return (
+      <Modal
+        visible={visible}
+        transparent
+        animationType="fade"
+        onRequestClose={onClose}
+      >
+        <View style={styles.webBackdrop}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} activeOpacity={1} />
+          <View style={styles.webContentContainer}>
+            <View style={styles.webHeader}>
+              <TouchableOpacity onPress={onClose} style={styles.webCloseBtn}>
+                <Text style={styles.webCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView 
+              showsVerticalScrollIndicator={false} 
+              contentContainerStyle={[
+                styles.webScrollViewContent,
+                { paddingBottom: Spacing.xl }
+              ]}
+            >
+              {renderContent()}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
 
   return (
     <BottomSheet
@@ -205,140 +377,7 @@ export default function ProductDetailSheet({ visible, item, cafeId, onClose }: P
           { paddingBottom: insets.bottom + Spacing.xl }
         ]}
       >
-        <View style={styles.hero}>
-          {isBeverage ? (
-            <>
-              {item.image_url && (
-                <Image 
-                  source={typeof item.image_url === 'string' ? { uri: item.image_url } : item.image_url} 
-                  style={[StyleSheet.absoluteFill, { opacity: 0.18 }]} 
-                  resizeMode="cover"
-                />
-              )}
-              <CupStack quantity={quantity} scale={selectedSize?.name === 'Large' ? 1 : selectedSize?.name === 'Small' ? 0.72 : 0.88} />
-            </>
-          ) : item.image_url ? (
-            <Image 
-              source={typeof item.image_url === 'string' ? { uri: item.image_url } : item.image_url} 
-              style={StyleSheet.absoluteFillObject} 
-              resizeMode="cover"
-            />
-          ) : (
-            <View style={styles.foodPlaceholder}>
-              <Text style={styles.foodPlaceholderEmoji}>
-                {item.category?.toLowerCase().includes('dessert') ? '🍰' : '🍔'}
-              </Text>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.content}>
-          <View style={styles.topRow}>
-            <View style={styles.popularPill}>
-              <AppIcon name="popular" size={11} color={Colors.brand} fill={Colors.brand} />
-              <Text style={styles.popularText}>{item.is_popular ? 'Popular' : 'Recommended'}</Text>
-            </View>
-            <Text style={[styles.price, { fontSize: responsive(18, 20, 22) }]}>₹{totalPrice}</Text>
-          </View>
-
-          <Text style={[styles.name, { fontSize: responsive(20, 24, 28) }]}>{item.name}</Text>
-          <Text style={[styles.desc, { fontSize: responsive(11, 12, 13) }]}>
-            {item.description || 'Experience the perfect blend of tradition and craftsmanship. Smooth, bold, and endlessly satisfying.'}
-          </Text>
-
-          {isBeverage && (
-            <View style={styles.caffeinePill}>
-              <AppIcon name="zap" size={13} color={Colors.brand} />
-              <Text style={styles.caffeineText}>
-                <Text style={styles.caffeineStrong}>{totalCaffeine.toFixed(0)} mg</Text> caffeine
-              </Text>
-            </View>
-          )}
-
-          {isBeverage && (
-            <>
-              <View style={styles.divider} />
-              <Text style={styles.sectionLabel}>Size</Text>
-              <View style={styles.sizeRow}>
-                {item.sizes?.map((size: any) => {
-                  const selected = selectedSize?.name === size.name;
-
-                  return (
-                    <TouchableOpacity
-                      key={size.name}
-                      style={[styles.sizeCard, selected && styles.optionActive]}
-                      onPress={() => setSelectedSize(size)}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={[styles.sizeLabel, selected && styles.optionActiveText]}>{size.name}</Text>
-                      <Text style={[styles.sizeMeta, selected && styles.optionActiveSubtext]}>
-                        {size.volume} {size.unit}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </>
-          )}
-
-          <View style={styles.divider} />
-          <Text style={styles.sectionLabel}>Quantity</Text>
-          <View style={styles.qtyRow}>
-            <TouchableOpacity style={styles.qtyBtn} onPress={() => setQuantity((v) => Math.max(1, v - 1))}>
-              <Text style={styles.qtyText}>-</Text>
-            </TouchableOpacity>
-            <Text style={styles.qtyValue}>{quantity}</Text>
-            <TouchableOpacity style={styles.qtyBtn} onPress={() => setQuantity((v) => Math.min(9, v + 1))}>
-              <Text style={styles.qtyText}>+</Text>
-            </TouchableOpacity>
-          </View>
-
-          {isBeverage && (
-            <>
-              <View style={styles.divider} />
-              <Text style={styles.sectionLabel}>Milk Type</Text>
-              <View style={[styles.milkRow, width < 360 && styles.milkRowWrap]}>
-                {MILKS.map((milk) => {
-                  const selected = selectedMilk === milk.id;
-
-                  return (
-                    <TouchableOpacity
-                      key={milk.id}
-                      style={[
-                        styles.milkCard, 
-                        selected && styles.optionActive,
-                        width < 360 && styles.milkCardSmall
-                      ]}
-                      onPress={() => setSelectedMilk(milk.id)}
-                      activeOpacity={0.85}
-                    >
-                      <AppIcon name={milk.icon} size={19} color={selected ? Colors.white : Colors.secondary} />
-                      <Text style={[styles.milkLabel, selected && styles.optionActiveText]}>{milk.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </>
-          )}
-
-          <TouchableOpacity
-            style={[styles.cta, { marginTop: Spacing.lg }]}
-            activeOpacity={0.9}
-            disabled={adding}
-            onPress={handleAddToCart}
-          >
-            {adding ? (
-              <ActivityIndicator size="small" color={Colors.white} />
-            ) : (
-              <>
-                <AppIcon name="cart" size={18} color={Colors.white} />
-                <Text style={styles.ctaText}>
-                  {width < 350 ? `Add — ₹${totalPrice}` : `Add to cart — ₹${totalPrice}`}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
+        {renderContent()}
       </BottomSheetScrollView>
     </BottomSheet>
   );
@@ -650,5 +689,41 @@ const styles = StyleSheet.create({
   },
   foodPlaceholderEmoji: {
     fontSize: 54,
+  },
+  webBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.md,
+  },
+  webContentContainer: {
+    width: '100%',
+    maxWidth: 500,
+    backgroundColor: Colors.white,
+    borderRadius: 26,
+    overflow: 'hidden',
+    maxHeight: '85%',
+  },
+  webScrollViewContent: {
+    paddingHorizontal: Spacing.md,
+  },
+  webHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    padding: Spacing.sm,
+  },
+  webCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FAF5EE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  webCloseText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: Colors.textSecondary,
   },
 });

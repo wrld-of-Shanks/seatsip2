@@ -67,10 +67,14 @@ describe('API Service', () => {
       await expect(fetchApi('/test')).rejects.toThrow('Network Error')
     })
 
-    it('should handle missing token', () => {
+    it('should handle missing token', async () => {
       document.cookie = ''
+      ;(global.fetch as jest.Mock).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      })
       
-      expect(() => fetchApi('/test')).not.toThrow()
+      await expect(fetchApi('/test')).resolves.toBeDefined()
     })
   })
 })

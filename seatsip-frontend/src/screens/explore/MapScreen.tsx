@@ -517,7 +517,6 @@ export default function MapScreen() {
 
   const selectRestaurant = (restaurant: Restaurant) => {
     if (selectedId === restaurant.id) {
-      navigation.navigate('CafeDetail', { cafeId: restaurant.id });
       return;
     }
 
@@ -565,6 +564,7 @@ export default function MapScreen() {
         selectedId={selectedRestaurant?.id}
         pinColors={PIN_COLORS}
         onSelect={selectRestaurant}
+        onOrder={openRestaurant}
         onGalleryOpen={() => setGalleryOpen(true)}
         onGalleryClose={() => setGalleryOpen(false)}
       />
