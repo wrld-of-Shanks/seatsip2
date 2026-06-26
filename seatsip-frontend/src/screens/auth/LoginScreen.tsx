@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import {
   ActivityIndicator,
   ToastAndroid,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { BlurView } from 'expo-blur';
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react-native';
@@ -43,6 +43,14 @@ export default function LoginScreen() {
   const [showPass, setShowPass] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      setEmail('');
+      setPassword('');
+      setShowPass(false);
+    }, [])
+  );
 
   useEffect(() => {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {

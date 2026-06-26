@@ -267,13 +267,8 @@ export default function BookingConfirmedScreen() {
               <View style={styles.detailCell}>
                 <Text style={styles.detailLabel}>VENUE</Text>
                 <View style={styles.venueRow}>
-                  <View style={styles.venueImagePlaceholder}>
-                    <AppIcon name="food" size={20} color="#8B5E3C" />
-                  </View>
-                  <View>
-                    <Text style={styles.venueName}>{cafeName}</Text>
-                    <Text style={styles.venueAddress}>Koramangala, Bengaluru</Text>
-                  </View>
+                  <Text style={styles.venueName} numberOfLines={2}>{cafeName}</Text>
+                  <Text style={styles.venueAddress}>Koramangala, Bengaluru</Text>
                 </View>
               </View>
               <View style={[styles.detailCell, styles.detailCellRight]}>
@@ -532,26 +527,13 @@ const styles = StyleSheet.create({
 
   // Venue
   venueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
     marginTop: 4,
-  },
-  venueImagePlaceholder: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#2D1F0E',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  venueImageEmoji: {
-    fontSize: 20,
   },
   venueName: {
     fontSize: 15,
     fontWeight: '800',
     color: '#1A1209',
+    flexShrink: 1,
   },
   venueAddress: {
     fontSize: 12,
