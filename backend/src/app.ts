@@ -32,7 +32,7 @@ import offersRouter from './api/offers';
 import { corsMiddleware, helmetMiddleware, requestId, sanitizeInput } from './security/http';
 import { secureLogger, pinoLogger } from './security/logger';
 import { redactObjectForLog } from './security/redaction';
-import { apiGeneralLimiter, apiStrictLimiter } from './security/rateLimit';
+import { apiGeneralLimiter, apiStrictLimiter, extractJwtUser, paymentLimiter } from './security/rateLimit';
 import pinoHttp from 'pino-http';
 import swaggerUi from 'swagger-ui-express';
 import swaggerSpec from './api/swagger';
@@ -40,6 +40,7 @@ import swaggerSpec from './api/swagger';
 export function createApp(): express.Application {
   const app = express();
 
+  app.set('trust proxy', 1);
   app.disable('x-powered-by');
   app.use(requestId);
   app.use(cookieParser());
@@ -50,7 +51,8 @@ export function createApp(): express.Application {
     logger: pinoLogger,
     genReqId: (req) => (req as any).requestId || crypto.randomUUID(),
   }));
-  app.use('/api/v1/payments', paymentsRouter);
+  app.use(extractJwtUser);
+  app.use('/api/v1/payments', paymentLimiter, paymentsRouter);
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
   app.use(sanitizeInput);
@@ -64,6 +66,8 @@ export function createApp(): express.Application {
   app.get('/api/docs.json', (_, res) => res.json(swaggerSpec));
 
   app.use('/api/v1/auth', authRouter);
+  app.use('/api/v1/admin/stats', apiStrictLimiter);
+  app.use('/api/v1/admin/revenue', apiStrictLimiter);
   app.use('/api/v1/admin', adminRouter);
   app.use('/api/v1/cafes', apiStrictLimiter, cafesRouter);
   app.use('/api/v1/menu', apiStrictLimiter, menuRouter);

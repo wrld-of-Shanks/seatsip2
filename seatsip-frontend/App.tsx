@@ -4,6 +4,7 @@ import { DarkTheme, DefaultTheme, NavigationContainer } from '@react-navigation/
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { CartProvider } from './src/context/CartContext';
@@ -61,7 +62,7 @@ import { ThemeProvider, useAppTheme } from './src/theme/ThemeContext';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
 
-import { TouchableOpacity, Text, View, StyleSheet, Platform, UIManager, LayoutAnimation } from 'react-native';
+import { TouchableOpacity, Text, View, StyleSheet, Platform, UIManager, LayoutAnimation, LogBox } from 'react-native';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Home, Map as MapIcon, Utensils, Gift, User } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -69,6 +70,9 @@ import { useFonts, Courgette_400Regular } from '@expo-google-fonts/courgette';
 import { Fredoka_700Bold, Fredoka_400Regular } from '@expo-google-fonts/fredoka';
 import AppIcon from './src/components/ui/AppIcon';
 import { SecureAppShell } from './src/security/SecureAppShell';
+
+// Disable all development warnings on screen
+LogBox.ignoreAllLogs();
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -171,18 +175,8 @@ function Navigation() {
   const { user, isLoading } = useAuth();
   const [minLoading, setMinLoading] = React.useState(true);
 
-  React.useEffect(() => {
-    if (!isLoading) {
-      // Keep loading screen for at least 1.5s for a premium feel
-      const timer = setTimeout(() => {
-        setMinLoading(false);
-      }, 1800);
-      return () => clearTimeout(timer);
-    }
-  }, [isLoading]);
-
-  if (isLoading) {
-    return null;
+  if (isLoading || minLoading) {
+    return <LoadingScreen onFinish={() => setMinLoading(false)} />;
   }
 
   return (
@@ -253,13 +247,13 @@ export default function App() {
             <UnreadNotificationsProvider>
               <CartProvider>
                 <RootErrorBoundary>
-                  <View style={{ flex: 1 }}>
+                  <GestureHandlerRootView style={{ flex: 1 }}>
                     <OfflineBanner />
                     <ThemedNavigationShell>
                       <Navigation />
                       <StatusBar style="auto" />
                     </ThemedNavigationShell>
-                  </View>
+                  </GestureHandlerRootView>
                 </RootErrorBoundary>
               </CartProvider>
             </UnreadNotificationsProvider>
@@ -307,6 +301,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   tabButtonActive: {
+    flex: 1.5,
     backgroundColor: '#F5EDD6',
     paddingHorizontal: 14,
     gap: 6,

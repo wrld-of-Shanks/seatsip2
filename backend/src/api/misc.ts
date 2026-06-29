@@ -8,6 +8,7 @@ import { audit, validate } from '../security/http';
 import { secureLogger } from '../security/logger';
 import { razorpay, razorpayKeyId, verifyRazorpayPaymentSignature } from '../payments/razorpay';
 import { savePushToken } from '../services/pushNotifications';
+import { paymentLimiter } from '../security/rateLimit';
 
 // ===== CART =====
 export const cartRouter = Router();
@@ -255,12 +256,13 @@ usersRouter.post('/wallet/topup', (_req: Request, res: Response) => {
   });
 });
 
-usersRouter.post('/wallet/topup/order', validate({ body: walletTopupOrderSchema }), audit('WALLET_TOPUP_ORDER', 'wallet'), async (req: AuthenticatedRequest, res: Response) => {
+usersRouter.post('/wallet/topup/order', paymentLimiter, validate({ body: walletTopupOrderSchema }), audit('WALLET_TOPUP_ORDER', 'wallet'), async (req: AuthenticatedRequest, res: Response) => {
   const { amount } = req.body as z.infer<typeof walletTopupOrderSchema>;
+  const receiptId = `wal_${req.user.userId.slice(-12)}_${Date.now()}`;
   const order = await razorpay.orders.create({
     amount: Math.round(amount * 100),
     currency: 'INR',
-    receipt: `wallet_${req.user.userId}_${Date.now()}`,
+    receipt: receiptId,
     notes: { purpose: 'wallet_topup', userId: req.user.userId },
   });
 
@@ -280,7 +282,7 @@ usersRouter.post('/wallet/topup/order', validate({ body: walletTopupOrderSchema 
   return res.status(201).json({ success: true, data: { orderId: order.id, amount: order.amount, currency: order.currency, keyId: razorpayKeyId() } });
 });
 
-usersRouter.post('/wallet/topup/verify', validate({ body: walletTopupVerifySchema }), audit('WALLET_TOPUP_VERIFY', 'wallet'), async (req: AuthenticatedRequest, res: Response) => {
+usersRouter.post('/wallet/topup/verify', paymentLimiter, validate({ body: walletTopupVerifySchema }), audit('WALLET_TOPUP_VERIFY', 'wallet'), async (req: AuthenticatedRequest, res: Response) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body as z.infer<typeof walletTopupVerifySchema>;
   if (!verifyRazorpayPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) {
     return res.status(400).json({ success: false, message: 'Invalid payment signature' });

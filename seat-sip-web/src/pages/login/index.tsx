@@ -30,6 +30,7 @@ export default function LoginPage() {
   });
 
   const onSubmit = async (data: LoginFormValues) => {
+    if (loading) return;
     setError('');
     setLoading(true);
 

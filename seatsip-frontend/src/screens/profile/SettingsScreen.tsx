@@ -29,13 +29,13 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 
 // Refactored Components
-import { SectionHeader, ToggleRow, ArrowRow, Divider, Icon } from '../../components/settings/SettingsRows';
+import { SectionHeader, ToggleRow, ArrowRow, Divider, Icon, LogoutRow } from '../../components/settings/SettingsRows';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export default function SettingsScreen() {
   const navigation = useNavigation<Nav>();
-  const { requestAccountDeletion } = useAuth();
+  const { logout, requestAccountDeletion } = useAuth();
   const insets = useSafeAreaInsets();
   const { darkMode, setDarkMode } = useAppTheme();
   const [pushNotifications, setPushNotifications] = useState(false);
@@ -164,6 +164,17 @@ export default function SettingsScreen() {
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Delete', style: 'destructive', onPress: () => void run() },
+      ]
+    );
+  };
+
+  const handleLogout = () => {
+    Alert.alert(
+      'Log Out',
+      'Are you sure you want to log out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Log Out', style: 'destructive', onPress: () => void logout() }
       ]
     );
   };
@@ -331,6 +342,11 @@ export default function SettingsScreen() {
               subtitle="Read our terms and conditions"
               onPress={() => navigation.navigate('Terms')}
             />
+          </View>
+
+          {/* LOGOUT */}
+          <View style={styles.section}>
+            <LogoutRow onPress={handleLogout} />
           </View>
 
           {/* Footer */}

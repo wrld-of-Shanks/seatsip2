@@ -435,7 +435,7 @@ function createMarkerElement(
 const MapCanvas = forwardRef<MapCanvasHandle, Props>(({ restaurants, city, selectedId, pinColors, onSelect, onGalleryOpen, onGalleryClose }, ref) => {
   const containerRef = useRef<any>(null);
   const mapRef = useRef<any | null>(null);
-  const markersRef = useRef<Marker[]>([]);
+  const markersRef = useRef<any[]>([]);
   const onSelectRef = useRef(onSelect);
   const onGalleryOpenRef = useRef(onGalleryOpen);
   const onGalleryCloseRef = useRef(onGalleryClose);

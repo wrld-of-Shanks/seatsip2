@@ -69,7 +69,7 @@ router.get('/stats', managerOnly, audit('ADMIN_STATS', 'admin'), async (req: Aut
           payment_status: 'PAID',
           created_at: { gte: today, lt: tomorrow },
         },
-        _sum: { total: true },
+        _sum: { total: true, commission: true, owner_amount: true },
       }),
       prisma.reservation.count({
         where: {
@@ -92,6 +92,8 @@ router.get('/stats', managerOnly, audit('ADMIN_STATS', 'admin'), async (req: Aut
         totalCafes,
         totalOrders,
         todayRevenue: todayRevenue._sum.total || 0,
+        todayCommission: todayRevenue._sum.commission || 0,
+        todayOwnerAmount: todayRevenue._sum.owner_amount || 0,
         activeReservations,
         newUsers,
       },
@@ -128,10 +130,13 @@ router.get('/revenue', managerOnly, async (req: AuthenticatedRequest, res: Respo
       select: {
         created_at: true,
         total: true,
+        commission: true,
+        owner_amount: true,
       },
       orderBy: { created_at: 'asc' },
     });
 
+    const isOwner = req.user.role === 'CAFE_OWNER';
     const revenueByDate: Record<string, number> = {};
     for (let i = 0; i < days; i++) {
       const date = new Date(startDate);
@@ -143,7 +148,12 @@ router.get('/revenue', managerOnly, async (req: AuthenticatedRequest, res: Respo
     for (const order of orders) {
       const dateStr = order.created_at.toISOString().split('T')[0];
       if (revenueByDate.hasOwnProperty(dateStr)) {
-        revenueByDate[dateStr] += order.total;
+        const orderTotal = order.total || 0;
+        const ownerAmount = order.owner_amount || 0;
+        const actualAmount = isOwner 
+          ? (ownerAmount > 0 ? ownerAmount : Number((orderTotal * 0.95).toFixed(2)))
+          : orderTotal;
+        revenueByDate[dateStr] += actualAmount;
       }
     }
 

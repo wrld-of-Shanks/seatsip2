@@ -1,14 +1,18 @@
 import axios from 'axios';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
+import * as Device from 'expo-device';
 import { fetch as pinnedFetch } from 'react-native-ssl-pinning';
 import { clearTokens, loadTokens, saveTokens } from '../../security/secureStorage';
 import { safeLog } from '../../security/safeLog';
 
 function readProcessEnv(): { NODE_ENV?: string; EXPO_PUBLIC_FORCE_PROD?: string; EXPO_PUBLIC_API_URL?: string } {
   try {
-    return ((globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ||
-      {}) as { NODE_ENV?: string; EXPO_PUBLIC_FORCE_PROD?: string; EXPO_PUBLIC_API_URL?: string };
+    return {
+      NODE_ENV: process.env.NODE_ENV,
+      EXPO_PUBLIC_FORCE_PROD: process.env.EXPO_PUBLIC_FORCE_PROD,
+      EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL,
+    };
   } catch {
     return {};
   }
@@ -24,15 +28,21 @@ export const isDev =
 const envApiUrl = readProcessEnv().EXPO_PUBLIC_API_URL?.trim() || '';
 const extraApiUrl = (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl?.trim() || '';
 
-export const API_BASE_URL =
+let resolvedApiUrl =
   envApiUrl || extraApiUrl ||
   (Platform.OS === 'web'
     ? (isDev ? 'http://localhost:3000/api/v1' : 'https://api.seatsip.in/api/v1')
     : (isDev
         ? Platform.OS === 'android'
-          ? 'http://10.0.2.2:3000/api/v1'
+          ? (Device.isDevice ? 'http://localhost:3000/api/v1' : 'http://10.0.2.2:3000/api/v1')
           : 'http://localhost:3000/api/v1'
         : 'https://api.seatsip.in/api/v1'));
+
+if (isDev && Device.isDevice && resolvedApiUrl.includes('10.0.2.2')) {
+  resolvedApiUrl = resolvedApiUrl.replace('10.0.2.2', 'localhost');
+}
+
+export const API_BASE_URL = resolvedApiUrl;
 
 /** SSL pinning only in production native builds (dev uses plain axios; pinning needs server leaf cert in native bundle). */
 const useSslPinning = Platform.OS !== 'web' && !isDev;

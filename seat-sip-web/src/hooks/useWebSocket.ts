@@ -13,32 +13,37 @@ export function useWebSocket(options: WebSocketOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<Socket | null>(null);
 
-  useEffect(() => {
-    const token = document.cookie.split('; ').find(row => row.startsWith('admin_token='))?.split('=')[1];
-    
-    if (!token) return;
-
-    const socket = io(process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:3002', {
+  const token = typeof document !== 'undefined' ? document.cookie.split('; ').find(row => row.startsWith('admin_token='))?.split('=')[1] : undefined;
+  
+  if (token && !socketRef.current) {
+    socketRef.current = io(process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:3002', {
       auth: { token },
       transports: ['websocket'],
     });
+  }
 
-    socketRef.current = socket;
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
 
-    socket.on('connect', () => {
+    const onConnect = () => {
       setIsConnected(true);
       console.log('WebSocket connected');
-    });
+    };
 
-    socket.on('disconnect', () => {
+    const onDisconnect = () => {
       setIsConnected(false);
       console.log('WebSocket disconnected');
-    });
+    };
 
-    socket.on('connect_error', (error) => {
+    const onConnectError = (error: any) => {
       console.error('WebSocket connection error:', error);
       toast.error('Real-time updates unavailable');
-    });
+    };
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+    socket.on('connect_error', onConnectError);
 
     // Event listeners for real-time updates
     socket.on('order:created', (data) => {
@@ -77,6 +82,16 @@ export function useWebSocket(options: WebSocketOptions = {}) {
     });
 
     return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('connect_error', onConnectError);
+      socket.off('order:created');
+      socket.off('order:updated');
+      socket.off('payment:received');
+      socket.off('payment:failed');
+      socket.off('reservation:created');
+      socket.off('reservation:updated');
+      socket.off('notification');
       socket.disconnect();
       socketRef.current = null;
     };

@@ -1,22 +1,22 @@
 import { render, screen, fireEvent } from '@/setup/test-utils'
 import { Filter } from '@/components/ui/Filter'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/router'
 
-jest.mock('next/navigation', () => ({
+jest.mock('next/router', () => ({
   useRouter: jest.fn(),
-  useSearchParams: jest.fn(),
 }))
 
 describe('Filter Component', () => {
   const mockPush = jest.fn()
-  const mockSearchParams = new URLSearchParams()
+  let mockQuery: Record<string, any> = {}
 
   beforeEach(() => {
     jest.clearAllMocks()
+    mockQuery = {}
     ;(useRouter as jest.Mock).mockReturnValue({
       push: mockPush,
+      query: mockQuery,
     })
-    ;(useSearchParams as jest.Mock).mockReturnValue(mockSearchParams)
   })
 
   const filterConfigs = [
@@ -81,8 +81,7 @@ describe('Filter Component', () => {
   })
 
   it('should show reset button when filters are active', () => {
-    mockSearchParams.set('search', 'test')
-    ;(useSearchParams as jest.Mock).mockReturnValue(mockSearchParams)
+    mockQuery.search = 'test'
 
     render(<Filter configs={filterConfigs} showReset />)
 
@@ -90,14 +89,13 @@ describe('Filter Component', () => {
   })
 
   it('should reset filters on button click', () => {
-    mockSearchParams.set('search', 'test')
-    ;(useSearchParams as jest.Mock).mockReturnValue(mockSearchParams)
+    mockQuery.search = 'test'
 
     render(<Filter configs={filterConfigs} showReset />)
 
     const resetButton = screen.getByText('Reset')
     fireEvent.click(resetButton)
 
-    expect(mockPush).toHaveBeenCalledWith(window.location.pathname, { scroll: false })
+    expect(mockPush).toHaveBeenCalledWith(expect.any(String), undefined, { scroll: false })
   })
 })

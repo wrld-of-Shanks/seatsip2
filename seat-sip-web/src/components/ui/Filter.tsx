@@ -91,12 +91,13 @@ export function Filter({ configs, onFilterChange, showReset = true }: FilterProp
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {configs.map((config) => (
           <div key={config.key}>
-            <label className="block text-sm font-medium text-stone-700 mb-1">
+            <label htmlFor={config.key} className="block text-sm font-medium text-stone-700 mb-1">
               {config.label}
             </label>
             {config.type === 'text' && (
               <input
                 type="text"
+                id={config.key}
                 value={filters[config.key] || ''}
                 onChange={(e) => updateFilter(config.key, e.target.value)}
                 className="w-full px-3 py-2 border border-stone-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
@@ -105,6 +106,7 @@ export function Filter({ configs, onFilterChange, showReset = true }: FilterProp
             )}
             {config.type === 'select' && (
               <select
+                id={config.key}
                 value={filters[config.key] || ''}
                 onChange={(e) => updateFilter(config.key, e.target.value)}
                 className="w-full px-3 py-2 border border-stone-300 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"

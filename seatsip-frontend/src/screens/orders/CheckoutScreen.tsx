@@ -26,6 +26,39 @@ import AppIcon from '../../components/ui/AppIcon';
 import RazorpayCheckout from 'react-native-razorpay';
 import { requireBiometric } from '../../security/deviceSecurity';
 
+const loadRazorpayScript = (): Promise<boolean> => {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined') {
+      resolve(false);
+      return;
+    }
+    if ((window as any).Razorpay) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+};
+
+const cleanPhone = (phone?: string) => {
+  if (!phone) return '';
+  const digits = phone.replace(/\D/g, '');
+  if (digits.startsWith('91') && digits.length === 12) {
+    return '+' + digits;
+  }
+  if (digits.length === 10) {
+    return '+91' + digits;
+  }
+  return phone;
+};
+
+
+
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type PaymentMethod = 'WALLET' | 'UPI' | 'CARD';
 type UpiProvider = 'GPAY' | 'PHONEPE' | 'PAYTM' | 'UPI_ID';
@@ -101,7 +134,7 @@ export default function CheckoutScreen() {
   const cafeId = cartItems[0]?.cafe_id || '';
   const deliveryFee = orderType === 'DELIVERY' ? 40 : 0;
   const finalTotal = (cart?.total || 0) + deliveryFee;
-  const walletBalance = user?.wallet_balance || 0;
+  const walletBalance = Number(user?.wallet_balance) || 0;
 
   const paymentReady =
     paymentMethod === 'WALLET'
@@ -192,23 +225,137 @@ export default function CheckoutScreen() {
 
   const openRazorpayCheckout = useCallback(async (): Promise<RazorpayAuthPayload> => {
     const intent = await ordersApi.createPaymentIntent({ cafe_id: cafeId, order_type: orderType });
-    const checkout = await RazorpayCheckout.open({
-      key: intent.data.data.keyId,
-      amount: intent.data.data.amount,
-      currency: intent.data.data.currency,
-      name: merchantName,
-      description: `SeatSip order at ${cartItems[0]?.cafe_name || 'cafe'}`,
-      order_id: intent.data.data.orderId,
-      prefill: { name: user?.name, email: user?.email, contact: user?.phone },
-      method: { upi: paymentMethod === 'UPI', card: paymentMethod === 'CARD', netbanking: paymentMethod === 'UPI', wallet: false },
-      theme: { color: Colors.accent },
-    });
-    return {
-      razorpay_order_id: checkout.razorpay_order_id,
-      razorpay_payment_id: checkout.razorpay_payment_id,
-      razorpay_signature: checkout.razorpay_signature,
-    };
+    const orderData = intent.data.data;
+    const formattedContact = cleanPhone(user?.phone);
+
+    if (Platform.OS === 'web') {
+      const loaded = await loadRazorpayScript();
+      if (!loaded) {
+        throw new Error('Failed to load Razorpay SDK. Please check your internet connection.');
+      }
+      return new Promise<RazorpayAuthPayload>((resolve, reject) => {
+        const options = {
+          key: orderData.keyId,
+          amount: orderData.amount,
+          currency: orderData.currency,
+          name: merchantName,
+          description: `SeatSip order at ${cartItems[0]?.cafe_name || 'cafe'}`,
+          order_id: orderData.orderId,
+          prefill: { name: user?.name, email: user?.email, contact: formattedContact },
+          theme: { color: Colors.accent },
+          config: {
+            display: {
+              hide: [
+                ...(paymentMethod === 'UPI' ? [
+                  { method: 'card' },
+                  { method: 'netbanking' },
+                  { method: 'wallet' },
+                  { method: 'paylater' },
+                  { method: 'emi' }
+                ] : []),
+                ...(paymentMethod === 'CARD' ? [
+                  { method: 'upi' },
+                  { method: 'netbanking' },
+                  { method: 'wallet' },
+                  { method: 'paylater' },
+                  { method: 'emi' }
+                ] : []),
+              ],
+              preferences: {
+                show_default_blocks: true
+              }
+            }
+          },
+          handler: (response: any) => {
+            resolve({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            });
+          },
+          modal: {
+            ondismiss: () => {
+              reject(new Error('Payment cancelled by user'));
+            },
+          },
+        };
+        const rzp = new (window as any).Razorpay(options);
+        rzp.on('payment.failed', (response: any) => {
+          reject(new Error(response.error.description || 'Payment failed'));
+        });
+        rzp.open();
+      });
+    }
+
+    try {
+      const checkout = await RazorpayCheckout.open({
+        key: orderData.keyId,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        name: merchantName,
+        description: `SeatSip order at ${cartItems[0]?.cafe_name || 'cafe'}`,
+        order_id: orderData.orderId,
+        prefill: { name: user?.name, email: user?.email, contact: formattedContact },
+        theme: { color: Colors.accent },
+        config: {
+          display: {
+            hide: [
+              ...(paymentMethod === 'UPI' ? [
+                { method: 'card' },
+                { method: 'netbanking' },
+                { method: 'wallet' },
+                { method: 'paylater' },
+                { method: 'emi' }
+              ] : []),
+              ...(paymentMethod === 'CARD' ? [
+                { method: 'upi' },
+                { method: 'netbanking' },
+                { method: 'wallet' },
+                { method: 'paylater' },
+                { method: 'emi' }
+              ] : []),
+            ],
+            preferences: {
+              show_default_blocks: true
+            }
+          }
+        },
+      });
+      return {
+        razorpay_order_id: checkout.razorpay_order_id,
+        razorpay_payment_id: checkout.razorpay_payment_id,
+        razorpay_signature: checkout.razorpay_signature,
+      };
+    } catch (err: any) {
+      if (__DEV__ && Platform.OS !== 'web') {
+        return new Promise<RazorpayAuthPayload>((resolve, reject) => {
+          Alert.alert(
+            'Dev Mode (Expo Go)',
+            'Razorpay native module is not linked in Expo Go. Simulate a successful payment?',
+            [
+              {
+                text: 'Simulate',
+                onPress: () => {
+                  resolve({
+                    razorpay_order_id: orderData.orderId,
+                    razorpay_payment_id: `dev_pay_${Date.now()}`,
+                    razorpay_signature: 'dev_bypass',
+                  });
+                },
+              },
+              {
+                text: 'Cancel',
+                style: 'cancel',
+                onPress: () => reject(new Error('Payment cancelled or simulated payment rejected')),
+              },
+            ]
+          );
+        });
+      }
+      throw err;
+    }
   }, [cafeId, cartItems, merchantName, orderType, paymentMethod, user?.email, user?.name, user?.phone]);
+
 
   const handleAuthorizeRazorpay = async () => {
     try {
@@ -373,53 +520,8 @@ export default function CheckoutScreen() {
               <>
                 <View style={styles.methodHeader}>
                   <Text style={styles.methodTitle}>UPI Payment</Text>
-                  <Text style={styles.secureText}>{merchantUpiId}</Text>
+                  <Text style={styles.secureText}>Razorpay Gateway</Text>
                 </View>
-                <View style={styles.upiGrid}>
-                  {UPI_PROVIDERS.map(provider => (
-                    <TouchableOpacity
-                      key={provider.id}
-                      onPress={() => {
-                        setUpiProvider(provider.id);
-                        setUpiOpened(false);
-                      }}
-                      style={[styles.upiOption, upiProvider === provider.id && styles.upiOptionActive]}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.upiText, upiProvider === provider.id && styles.optionTextActive]}>{provider.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                {upiProvider === 'UPI_ID' ? (
-                  <TextInput
-                    value={upiId}
-                    onChangeText={setUpiId}
-                    placeholder="yourname@bank"
-                    placeholderTextColor={Colors.textMuted}
-                    autoCapitalize="none"
-                    keyboardType="email-address"
-                    style={styles.input}
-                  />
-                ) : (
-                  <Button
-                    title={`Open ${UPI_PROVIDERS.find(p => p.id === upiProvider)?.label}`}
-                    onPress={handleOpenUpi}
-                    variant="outline"
-                    fullWidth
-                    icon={<AppIcon name="payments" size={18} color={Colors.primary} />}
-                    style={{ marginTop: Spacing.md }}
-                  />
-                )}
-
-                <TextInput
-                  value={upiReference}
-                  onChangeText={setUpiReference}
-                  placeholder="UPI transaction reference"
-                  placeholderTextColor={Colors.textMuted}
-                  autoCapitalize="characters"
-                  style={styles.input}
-                />
                 <Text style={[styles.helperText, !razorpayAuth && styles.errorText]}>{paymentHelperText}</Text>
                 {!razorpayAuth && (
                   <Button
