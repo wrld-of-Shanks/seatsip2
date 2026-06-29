@@ -79,6 +79,7 @@ export default function LoginScreen() {
   }, []);
 
   const handleLogin = async () => {
+    if (loading) return;
     console.log('[Login] Login attempt started');
     if (!email.trim() || !password) {
       console.log('[Login] Missing fields');
